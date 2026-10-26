@@ -1,0 +1,756 @@
+name: Build release binaries
+
+# This public repository holds only release tooling. Both build inputs are private:
+# the bridge source (location supplied only by the CORTEN_REPO_SSH_URL secret) and
+# the OpenCider overlay (mackid1993/OpenCider). They are checked out only by manual jobs started by
+# trusted writers of this repository. Never add a push, PR, pull_request_target,
+# workflow_run, or repository_dispatch trigger here: this workflow receives two
+# read-only deploy-key secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      build_scope:
+        description: Build selection
+        required: true
+        default: All platforms
+        type: choice
+        options:
+          - Mac only
+          - Linux AMD64 only
+          - Linux ARM64 only
+          - Linux both
+          - All platforms
+      version_bump:
+        description: Version increment from the latest published release; exact draft tag is shown before builds start
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - manual
+      manual_version:
+        description: Exact MAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH tag, required when version selection is manual
+        required: false
+        type: string
+      release_title:
+        description: Draft release title, required only for All platforms
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  # Resolve the release version before expensive builds begin. GitHub's manual
+  # dispatch form is static, so this uses the latest published release at run
+  # time. Draft releases are intentionally excluded by the /releases/latest API.
+  resolve-release-version:
+    name: Resolve release version
+    runs-on: ubuntu-24.04
+    outputs:
+      release_tag: ${{ steps.version.outputs.release_tag }}
+    steps:
+      - name: Check out public release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Calculate next semantic version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_SCOPE: ${{ inputs.build_scope }}
+          BUMP: ${{ inputs.version_bump }}
+          MANUAL_VERSION: ${{ inputs.manual_version }}
+          RELEASE_TITLE: ${{ inputs.release_title }}
+        run: |
+          set -euo pipefail
+          if [ "$BUILD_SCOPE" != 'All platforms' ]; then
+            {
+              echo '## Platform build selected'
+              echo
+              echo "Selection: \`$BUILD_SCOPE\`"
+              echo 'No release tag will be reserved and no draft release will be created.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [ -n "$RELEASE_TITLE" ] || {
+            echo '::error::Draft release title is required for All platforms.'
+            exit 1
+          }
+          LATEST_TAG="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          if [ "$BUMP" = manual ]; then
+            [ -n "$MANUAL_VERSION" ] || {
+              echo '::error::Manual version is required when version selection is manual.'
+              exit 1
+            }
+            [[ "$MANUAL_VERSION" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+              echo '::error::Manual version must be MAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH.'
+              exit 1
+            }
+            NEXT_TAG="$MANUAL_VERSION"
+            VERSION_SELECTION="manual: $NEXT_TAG"
+          else
+            NEXT_TAG="$(./scripts/next-release-tag.sh "$LATEST_TAG" "$BUMP")"
+            VERSION_SELECTION="bump: $BUMP"
+          fi
+
+          if ! EXISTING_REF="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$NEXT_TAG" --jq '.object.type + ":" + .object.sha' 2>/dev/null)"; then
+            EXISTING_REF=''
+          fi
+          if [ -n "$EXISTING_REF" ]; then
+            if [ "$EXISTING_REF" = "commit:$GITHUB_SHA" ]; then
+              TAG_STATUS='Tag already points to this commit; reusing it.'
+            elif [ "$BUMP" = manual ]; then
+              TAG_STATUS="Manual selection will reuse the existing tag without moving it: $NEXT_TAG"
+            else
+              echo "::error::Existing automatically selected tag points to a different commit: $NEXT_TAG"
+              exit 1
+            fi
+          else
+            TAG_STATUS='Tag is available and will be reserved after the builds pass.'
+          fi
+
+          if ! EXISTING_RELEASE="$(gh release view "$NEXT_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            EXISTING_RELEASE=''
+          fi
+          if [ -n "$EXISTING_RELEASE" ]; then
+            echo "::error::An existing release already uses this tag; handle it manually before retrying: $NEXT_TAG"
+            exit 1
+          fi
+          printf 'release_tag=%s\n' "$NEXT_TAG" >> "$GITHUB_OUTPUT"
+          {
+            echo '## Release version resolved'
+            echo
+            echo "Latest published release: \`$LATEST_TAG\`"
+            echo "Version selection: \`$VERSION_SELECTION\`"
+            echo "Draft release tag: \`$NEXT_TAG\`"
+            echo "$TAG_STATUS"
+            echo 'A new draft release will be created.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify-rustpush-patches:
+    name: Apply and verify all portable RustPush patches
+    needs: resolve-release-version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      corten_ref_token: ${{ steps.corten.outputs.ref_token }}
+      opencider_ref_token: ${{ steps.opencider.outputs.ref_token }}
+    steps:
+      - name: Check out public release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Check out and tokenize private bridge source revision
+        id: corten
+        env:
+          PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.CORTEN_READ_DEPLOY_KEY }}
+          CORTEN_REPO_SSH_URL: ${{ secrets.CORTEN_REPO_SSH_URL }}
+        run: |
+          set -euo pipefail
+          ./.github/scripts/checkout-private-repo.sh corten corten master
+          sha="$(git -C corten rev-parse HEAD)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo '::error::bridge source checkout did not resolve to a full commit SHA.'
+            exit 1
+          }
+          token="$(PRIVATE_SHA="$sha" python3 - <<'PY'
+          import hashlib
+          import hmac
+          import os
+
+          key = os.environ['PRIVATE_REPO_DEPLOY_KEY'].encode().rstrip(b'\r\n') + b'\n'
+          message = b'corten-ref-v1:' + os.environ['PRIVATE_SHA'].encode()
+          print(hmac.new(key, message, hashlib.sha256).hexdigest())
+          PY
+          )"
+          [[ "$token" =~ ^[0-9a-f]{64}$ ]] || {
+            echo '::error::bridge source revision token generation failed.'
+            exit 1
+          }
+          printf 'ref_token=%s\n' "$token" >> "$GITHUB_OUTPUT"
+
+      - name: Check out and tokenize private OpenCider revision
+        id: opencider
+        env:
+          PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.OPENCIDER_READ_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          ./.github/scripts/checkout-private-repo.sh opencider opencider master
+          sha="$(git -C opencider rev-parse HEAD)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo '::error::OpenCider checkout did not resolve to a full commit SHA.'
+            exit 1
+          }
+          token="$(PRIVATE_SHA="$sha" python3 - <<'PY'
+          import hashlib
+          import hmac
+          import os
+
+          key = os.environ['PRIVATE_REPO_DEPLOY_KEY'].encode().rstrip(b'\r\n') + b'\n'
+          message = b'opencider-ref-v1:' + os.environ['PRIVATE_SHA'].encode()
+          print(hmac.new(key, message, hashlib.sha256).hexdigest())
+          PY
+          )"
+          [[ "$token" =~ ^[0-9a-f]{64}$ ]] || {
+            echo '::error::OpenCider revision token generation failed.'
+            exit 1
+          }
+          printf 'ref_token=%s\n' "$token" >> "$GITHUB_OUTPUT"
+
+      - name: Apply and verify all portable RustPush patches
+        working-directory: opencider
+        env:
+          REPO_DIR: ${{ github.workspace }}/corten
+          BUILD_DIR: ${{ runner.temp }}/opencider-patch-verify
+          PATCH_SAFE_STATUS_FILE: ${{ runner.temp }}/opencider-patch-status
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP/opencider-patch-verify.log"' EXIT
+          rm -f "$PATCH_SAFE_STATUS_FILE"
+          if ! ./verify-rustpush-patches.sh > "$RUNNER_TEMP/opencider-patch-verify.log" 2>&1; then
+            status=unknown
+            candidate="$(cat "$PATCH_SAFE_STATUS_FILE" 2>/dev/null || true)"
+            if [[ "$candidate" =~ ^(rustpush|apple-private-apis|rustpush-public):[1-9][0-9]*:[1-9][0-9]*$ ]]; then
+              IFS=: read -r scope index total <<< "$candidate"
+              if (( index <= total )); then
+                status="$candidate"
+              fi
+            fi
+            echo "::error::Portable RustPush patch verification failed at source-safe entry: $status. Detailed patch/source output was intentionally withheld from public Actions logs."
+            exit 1
+          fi
+          echo 'RustPush patches applied and verified for private and public build flavors.'
+
+  macos-amd64:
+    name: macOS x86_64 slice
+    needs: [resolve-release-version, verify-rustpush-patches]
+    if: inputs.build_scope == 'Mac only' || inputs.build_scope == 'All platforms'
+    # Cross-compile x86_64 on Apple Silicon: clang and Rust both target x86_64
+    # explicitly, and this runner is substantially faster than the Intel host.
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Check out public release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Check out private bridge source
+        env:
+          PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.CORTEN_READ_DEPLOY_KEY }}
+          CORTEN_REPO_SSH_URL: ${{ secrets.CORTEN_REPO_SSH_URL }}
+          CORTEN_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.corten_ref_token }}
+        run: ./.github/scripts/checkout-private-repo.sh corten corten "$CORTEN_REF_TOKEN"
+
+      - name: Check out private OpenCider
+        env:
+          PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.OPENCIDER_READ_DEPLOY_KEY }}
+          OPENCIDER_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.opencider_ref_token }}
+        run: ./.github/scripts/checkout-private-repo.sh opencider opencider "$OPENCIDER_REF_TOKEN"
+
+      # Cache only public crates.io metadata and authenticated .crate archives.
+      # Never cache registry/src, Cargo target output, or any OpenCider path.
+      - name: Cache public Cargo registry inputs
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+          key: opencider-public-cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('corten/pkg/rustpushgo/Cargo.lock', 'corten/nac-validation/Cargo.lock', 'corten/third_party/rustpush-upstream.sha') }}
+
+      - name: Install Go from the bridge toolchain declaration
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: corten/go.mod
+          cache: false
+
+      # OpenCider's slice entrypoint builds the private clean-room overlay on
+      # macOS (same as Linux); its private output stays confined to the temp log.
+      - name: Build x86_64 macOS slice
+        working-directory: opencider
+        env:
+          REPO_DIR: ${{ github.workspace }}/corten
+          BUILD_DIR: ${{ runner.temp }}/opencider-macos-amd64
+        run: ../.github/scripts/run-private-slice-build.sh macos amd64
+
+      - name: Verify x86_64 slice
+        env:
+          REPO_DIR: ${{ github.workspace }}/corten
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP/opencider-macos-amd64-artifact-verify.log"' EXIT
+          binary=opencider/dist/corten-matrix-macos.amd64
+          test -f "$binary" && test ! -L "$binary" && test -x "$binary"
+          if ! ./opencider/tools/verify-macos-artifact.sh "$binary" > "$RUNNER_TEMP/opencider-macos-amd64-artifact-verify.log" 2>&1; then
+            echo '::error::Private macOS artifact safety verification failed. Detailed inspection output was intentionally withheld from public Actions logs.'
+            exit 1
+          fi
+          otool -hv "$binary" | grep -qw EXECUTE
+          test "$(lipo -archs "$binary")" = x86_64
+
+      # Only an executable slice crosses the job boundary. Never upload dist/**:
+      # it contains private-linked static archives and other non-release output.
+      - name: Upload x86_64 macOS slice
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-amd64-slice
+          path: opencider/dist/corten-matrix-macos.amd64
+          if-no-files-found: error
+          retention-days: 1
+
+  macos-arm64:
+    name: macOS arm64 slice
+    needs: [resolve-release-version, verify-rustpush-patches]
+    if: inputs.build_scope == 'Mac only' || inputs.build_scope == 'All platforms'
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Check out public release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Check out private bridge source
+        env:
+          PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.CORTEN_READ_DEPLOY_KEY }}
+          CORTEN_REPO_SSH_URL: ${{ secrets.CORTEN_REPO_SSH_URL }}
+          CORTEN_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.corten_ref_token }}
+        run: ./.github/scripts/checkout-private-repo.sh corten corten "$CORTEN_REF_TOKEN"
+
+      - name: Check out private OpenCider
+        env:
+          PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.OPENCIDER_READ_DEPLOY_KEY }}
+          OPENCIDER_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.opencider_ref_token }}
+        run: ./.github/scripts/checkout-private-repo.sh opencider opencider "$OPENCIDER_REF_TOKEN"
+
+      # Cache only public crates.io metadata and authenticated .crate archives.
+      # Never cache registry/src, Cargo target output, or any OpenCider path.
+      - name: Cache public Cargo registry inputs
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+          key: opencider-public-cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('corten/pkg/rustpushgo/Cargo.lock', 'corten/nac-validation/Cargo.lock', 'corten/third_party/rustpush-upstream.sha') }}
+
+      - name: Install Go from the bridge toolchain declaration
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: corten/go.mod
+          cache: false
+
+      # OpenCider's slice entrypoint builds the private clean-room overlay on
+      # macOS (same as Linux); its private output stays confined to the temp log.
+      - name: Build arm64 macOS slice
+        working-directory: opencider
+        env:
+          REPO_DIR: ${{ github.workspace }}/corten
+          BUILD_DIR: ${{ runner.temp }}/opencider-macos-arm64
+        run: ../.github/scripts/run-private-slice-build.sh macos arm64
+
+      - name: Verify arm64 slice
+        env:
+          REPO_DIR: ${{ github.workspace }}/corten
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP/opencider-macos-arm64-artifact-verify.log"' EXIT
+          binary=opencider/dist/corten-matrix-macos.arm64
+          test -f "$binary" && test ! -L "$binary" && test -x "$binary"
+          if ! ./opencider/tools/verify-macos-artifact.sh "$binary" > "$RUNNER_TEMP/opencider-macos-arm64-artifact-verify.log" 2>&1; then
+            echo '::error::Private macOS artifact safety verification failed. Detailed inspection output was intentionally withheld from public Actions logs.'
+            exit 1
+          fi
+          otool -hv "$binary" | grep -qw EXECUTE
+          test "$(lipo -archs "$binary")" = arm64
+
+      - name: Upload arm64 macOS slice
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-arm64-slice
+          path: opencider/dist/corten-matrix-macos.arm64
+          if-no-files-found: error
+          retention-days: 1
+
+  linux-amd64:
+    name: Linux amd64
+    needs: [resolve-release-version, verify-rustpush-patches]
+    if: inputs.build_scope == 'Linux AMD64 only' || inputs.build_scope == 'Linux both' || inputs.build_scope == 'All platforms'
+    runs-on: ubuntu-24.04
+    # Build directly on the free native runner with Zig's glibc 2.28 target.
+    # This removes both Rocky containers and the duplicate package bootstrap.
+    timeout-minutes: 60
+    steps:
+      - name: Check out public release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Check out private bridge source
+        env:
+          PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.CORTEN_READ_DEPLOY_KEY }}
+          CORTEN_REPO_SSH_URL: ${{ secrets.CORTEN_REPO_SSH_URL }}
+          CORTEN_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.corten_ref_token }}
+        run: ./.github/scripts/checkout-private-repo.sh corten corten "$CORTEN_REF_TOKEN"
+
+      - name: Check out private OpenCider
+        env:
+          PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.OPENCIDER_READ_DEPLOY_KEY }}
+          OPENCIDER_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.opencider_ref_token }}
+        run: ./.github/scripts/checkout-private-repo.sh opencider opencider "$OPENCIDER_REF_TOKEN"
+
+      # Cache only public crates.io metadata and authenticated .crate archives.
+      # Never cache registry/src, Cargo target output, or any OpenCider path.
+      - name: Cache public Cargo registry inputs
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+          key: opencider-public-cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('corten/pkg/rustpushgo/Cargo.lock', 'corten/nac-validation/Cargo.lock', 'corten/third_party/rustpush-upstream.sha') }}
+
+      - name: Install Go from the bridge toolchain declaration
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: corten/go.mod
+          cache: false
+
+      - name: Build amd64 Linux binary with Zig
+        working-directory: opencider
+        env:
+          REPO_DIR: ${{ github.workspace }}/corten
+          BUILD_DIR: ${{ runner.temp }}/opencider-linux-amd64
+        run: ../.github/scripts/run-private-slice-build.sh linux amd64
+
+      - name: Verify amd64 ELF
+        env:
+          REPO_DIR: ${{ github.workspace }}/corten
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP/opencider-linux-amd64-artifact-verify.log"' EXIT
+          binary=opencider/dist/corten-matrix-linux-amd64
+          test -f "$binary" && test ! -L "$binary" && test -x "$binary"
+          if ! ./opencider/tools/verify-linux-artifact.sh "$binary" amd64 > "$RUNNER_TEMP/opencider-linux-amd64-artifact-verify.log" 2>&1; then
+            echo '::error::Private Linux artifact safety verification failed. Detailed inspection output was intentionally withheld from public Actions logs.'
+            exit 1
+          fi
+
+      - name: Upload amd64 Linux binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-amd64-binary
+          path: opencider/dist/corten-matrix-linux-amd64
+          if-no-files-found: error
+          retention-days: 1
+
+  linux-arm64:
+    name: Linux arm64
+    needs: [resolve-release-version, verify-rustpush-patches]
+    if: inputs.build_scope == 'Linux ARM64 only' || inputs.build_scope == 'Linux both' || inputs.build_scope == 'All platforms'
+    runs-on: ubuntu-24.04-arm
+    # Build directly on the free native runner with Zig's glibc 2.28 target.
+    # This removes both Rocky containers and the duplicate package bootstrap.
+    timeout-minutes: 60
+    steps:
+      - name: Check out public release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Check out private bridge source
+        env:
+          PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.CORTEN_READ_DEPLOY_KEY }}
+          CORTEN_REPO_SSH_URL: ${{ secrets.CORTEN_REPO_SSH_URL }}
+          CORTEN_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.corten_ref_token }}
+        run: ./.github/scripts/checkout-private-repo.sh corten corten "$CORTEN_REF_TOKEN"
+
+      - name: Check out private OpenCider
+        env:
+          PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.OPENCIDER_READ_DEPLOY_KEY }}
+          OPENCIDER_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.opencider_ref_token }}
+        run: ./.github/scripts/checkout-private-repo.sh opencider opencider "$OPENCIDER_REF_TOKEN"
+
+      # Cache only public crates.io metadata and authenticated .crate archives.
+      # Never cache registry/src, Cargo target output, or any OpenCider path.
+      - name: Cache public Cargo registry inputs
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+          key: opencider-public-cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('corten/pkg/rustpushgo/Cargo.lock', 'corten/nac-validation/Cargo.lock', 'corten/third_party/rustpush-upstream.sha') }}
+
+      - name: Install Go from the bridge toolchain declaration
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: corten/go.mod
+          cache: false
+
+      - name: Build arm64 Linux binary with Zig
+        working-directory: opencider
+        env:
+          REPO_DIR: ${{ github.workspace }}/corten
+          BUILD_DIR: ${{ runner.temp }}/opencider-linux-arm64
+        run: ../.github/scripts/run-private-slice-build.sh linux arm64
+
+      - name: Verify arm64 ELF
+        env:
+          REPO_DIR: ${{ github.workspace }}/corten
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP/opencider-linux-arm64-artifact-verify.log"' EXIT
+          binary=opencider/dist/corten-matrix-linux-arm64
+          test -f "$binary" && test ! -L "$binary" && test -x "$binary"
+          if ! ./opencider/tools/verify-linux-artifact.sh "$binary" arm64 > "$RUNNER_TEMP/opencider-linux-arm64-artifact-verify.log" 2>&1; then
+            echo '::error::Private Linux artifact safety verification failed. Detailed inspection output was intentionally withheld from public Actions logs.'
+            exit 1
+          fi
+
+      - name: Upload arm64 Linux binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-arm64-binary
+          path: opencider/dist/corten-matrix-linux-arm64
+          if-no-files-found: error
+          retention-days: 1
+
+  assemble-macos:
+    name: Assemble universal macOS binary
+    needs: [verify-rustpush-patches, macos-amd64, macos-arm64]
+    if: >-
+      always() &&
+      !cancelled() &&
+      (inputs.build_scope == 'Mac only' || inputs.build_scope == 'All platforms') &&
+      needs.macos-amd64.result == 'success' &&
+      needs.macos-arm64.result == 'success'
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - name: Check out public release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Check out private bridge source
+        env:
+          PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.CORTEN_READ_DEPLOY_KEY }}
+          CORTEN_REPO_SSH_URL: ${{ secrets.CORTEN_REPO_SSH_URL }}
+          CORTEN_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.corten_ref_token }}
+        run: ./.github/scripts/checkout-private-repo.sh corten corten "$CORTEN_REF_TOKEN"
+
+      - name: Check out private OpenCider finalizer
+        env:
+          PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.OPENCIDER_READ_DEPLOY_KEY }}
+          OPENCIDER_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.opencider_ref_token }}
+        run: ./.github/scripts/checkout-private-repo.sh opencider opencider "$OPENCIDER_REF_TOKEN"
+
+      - name: Download x86_64 macOS slice
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-amd64-slice
+          path: opencider/dist
+
+      - name: Download arm64 macOS slice
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-arm64-slice
+          path: opencider/dist
+
+      - name: Restore downloaded executable modes
+        run: ./.github/scripts/restore-downloaded-executables.sh mac opencider/dist
+
+      # Compilation happens on Apple Silicon for speed. Execute the downloaded
+      # x86_64 slice on this Intel finalizer before Lipo so release validation
+      # still includes a native launch rather than architecture inspection alone.
+      - name: Smoke-test x86_64 slice natively
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          binary=opencider/dist/corten-matrix-macos.amd64
+          log="$RUNNER_TEMP/opencider-macos-amd64-smoke.log"
+          trap 'rm -f "$log"' EXIT
+          if ! python3 - "$binary" "$log" <<'PY'
+          import subprocess
+          import sys
+
+          binary, log_path = sys.argv[1:]
+          with open(log_path, "wb") as log:
+              subprocess.run(
+                  [binary, "--help"],
+                  stdout=log,
+                  stderr=subprocess.STDOUT,
+                  timeout=30,
+                  check=True,
+              )
+          PY
+          then
+            echo '::error::Native x86_64 macOS smoke test failed. Detailed output was intentionally withheld from public Actions logs.'
+            exit 1
+          fi
+
+      - name: Lipo and apply identity-free macOS kernel seal
+        working-directory: opencider
+        env:
+          REPO_DIR: ${{ github.workspace }}/corten
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP/opencider-build.log"' EXIT
+          if ! ./build-macos-universal.sh > "$RUNNER_TEMP/opencider-build.log" 2>&1; then
+            echo '::error::Private build failed. Detailed compiler output was intentionally withheld from public Actions logs.'
+            exit 1
+          fi
+
+      # Both input slices already passed the complete private-source boundary
+      # gate. Lipo introduces no new printable content; verify only the universal
+      # structure and identity-free arm64 kernel seal here. This is neither
+      # Developer ID signing nor notarization and does not satisfy Gatekeeper.
+      - name: Verify universal macOS structure and kernel seal
+        run: |
+          set -euo pipefail
+          binary=opencider/dist/corten-matrix-macos
+          test -f "$binary" && test ! -L "$binary" && test -x "$binary"
+          otool -hv "$binary" | grep -qw EXECUTE
+          lipo -archs "$binary" | grep -qw arm64
+          lipo -archs "$binary" | grep -qw x86_64
+          codesign --verify "$binary"
+
+      - name: Upload universal macOS binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-universal-binary
+          path: opencider/dist/corten-matrix-macos
+          if-no-files-found: error
+          retention-days: 1
+
+  prepare-release:
+    name: Prepare draft release
+    needs: [resolve-release-version, assemble-macos, linux-amd64, linux-arm64]
+    if: >-
+      always() &&
+      !cancelled() &&
+      inputs.build_scope == 'All platforms' &&
+      needs.resolve-release-version.result == 'success' &&
+      needs.assemble-macos.result == 'success' &&
+      needs.linux-amd64.result == 'success' &&
+      needs.linux-arm64.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # This packaging-only job is the sole release mutation boundary. It receives
+    # no OpenCider secret or private checkout and compiles no source.
+    permissions:
+      contents: write
+    steps:
+      - name: Check out public release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Download universal macOS binary
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-universal-binary
+          path: dist
+
+      - name: Download amd64 Linux binary
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: linux-amd64-binary
+          path: dist
+
+      - name: Download arm64 Linux binary
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: linux-arm64-binary
+          path: dist
+
+      - name: Restore and validate final release binaries
+        run: |
+          set -euo pipefail
+          ./.github/scripts/restore-downloaded-executables.sh release dist
+          for binary in \
+            dist/corten-matrix-macos \
+            dist/corten-matrix-linux-amd64 \
+            dist/corten-matrix-linux-arm64; do
+            test -f "$binary" && test ! -L "$binary" && test -x "$binary"
+          done
+          test "$(find dist -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" = 3
+
+      # Reserve the tag immediately before release creation. A retry may reuse a
+      # tag already pointing to this exact workflow commit; any other target is
+      # still a hard collision.
+      - name: Reserve draft release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve-release-version.outputs.release_tag }}
+          VERSION_SELECTION: ${{ inputs.version_bump }}
+        run: |
+          set -euo pipefail
+          if ! EXISTING_REF="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.type + ":" + .object.sha' 2>/dev/null)"; then
+            EXISTING_REF=''
+          fi
+          if [ -z "$EXISTING_REF" ]; then
+            if gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f "ref=refs/tags/$RELEASE_TAG" \
+              -f "sha=$GITHUB_SHA" >/dev/null; then
+              echo 'Reserved a new release tag.'
+              exit 0
+            fi
+            # A concurrent retry may have created the same safe ref.
+            if ! EXISTING_REF="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.type + ":" + .object.sha' 2>/dev/null)"; then
+              EXISTING_REF=''
+            fi
+          fi
+          if [ "$EXISTING_REF" = "commit:$GITHUB_SHA" ]; then
+            echo 'Tag already points to this commit; reusing it.'
+          elif [ "$VERSION_SELECTION" = manual ] && [ -n "$EXISTING_REF" ]; then
+            echo "Manual selection will reuse the existing tag without moving it: $RELEASE_TAG"
+          else
+            echo "::error::Existing automatically selected tag points to a different commit: $RELEASE_TAG"
+            exit 1
+          fi
+
+      # This is the manual approval boundary. The job attaches only the three
+      # verified end-user binaries to a draft release. It deliberately does not
+      # generate notes: edit the draft's notes in GitHub, then publish manually.
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve-release-version.outputs.release_tag }}
+          RELEASE_TITLE: ${{ inputs.release_title }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$RELEASE_TITLE" \
+            --draft \
+            dist/corten-matrix-macos \
+            dist/corten-matrix-linux-amd64 \
+            dist/corten-matrix-linux-arm64
+
+      - name: Verify draft release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve-release-version.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,assets --jq '
+              if .isDraft and ([.assets[].name] | sort == [
+                "corten-matrix-linux-amd64",
+                "corten-matrix-linux-arm64",
+                "corten-matrix-macos"
+              ]) then
+                "verified draft release with exactly the three intended binaries"
+              else
+                error("draft release state or asset allowlist is wrong")
+              end'
+          {
+            echo '## Draft release ready'
+            echo
+            echo 'Add/edit release notes in GitHub, then publish it with **Set as latest release** enabled.'
+          } >> "$GITHUB_STEP_SUMMARY"

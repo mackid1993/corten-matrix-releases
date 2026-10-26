@@ -1,0 +1,11 @@
+#!/bin/bash
+# Refuse to commit private build inputs or outputs into this public repository,
+# even when staged with `git add -f`. Activate per clone with:
+#     git config core.hooksPath .githooks
+blocked=$(git diff --cached --name-only | grep -E '^opencider/|^corten/|^dist/|(^|/)librustpushgo\.a$|(^|/)target/')
+if [ -n "$blocked" ]; then
+  echo "COMMIT BLOCKED: private/build paths are staged:" >&2
+  echo "$blocked" | sed 's/^/   /' >&2
+  exit 1
+fi
+exit 0
