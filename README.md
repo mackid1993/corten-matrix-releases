@@ -16,9 +16,9 @@ After downloading the binary you run `corten-matrix setup` (self-hosted) or `cor
 
 ## Quick Start (macOS)
 
-macOS 13+ required (Ventura or later). Sign into iCloud on the Mac running the bridge (Settings → Apple ID) — this lets Apple recognize the device so login works without 2FA prompts.
+macOS 13+ required (Ventura or later).
 
-> **No key extraction on macOS.** On a Mac the bridge reads that Mac's own hardware identifiers during login, so there's **no key to extract**; just sign in. Extracting a hardware key is only for running the bridge on **Linux**; see [Quick Start (Linux)](#quick-start-linux).
+> **No key extraction on macOS.** During login the bridge reads the hardware identifiers of the Mac it's running on and registers with them automatically, so there's **no key to extract** and nothing to set up beforehand. Login asks for your Apple ID, password, and a 2FA code if Apple requests one, the same as on Linux. Extracting a hardware key is only needed to run the bridge on **Linux**; see [Quick Start (Linux)](#quick-start-linux).
 
 1. Download the `corten-matrix` binary for macOS from the [Releases page](https://github.com/mackid1993/corten-matrix-releases/releases) and make it executable (`chmod +x corten-matrix`). Rename said binary if desired. The platform and architecture name is appended to distinguish between releases. macOS is a universal binary.
 2. Run setup:
@@ -161,7 +161,7 @@ There are two ways to log in:
 - **Through the setup flow (default).** `corten-matrix setup` and `corten-matrix setup-beeper` detect a missing login and run the iMessage login inline at the end. This is the path almost everyone uses — answer the prompts in the terminal and you're done.
 - **Through the bridge bot (alternative).** DM the bot in the Matrix management room and run the **"Apple ID (External Key)"** login flow. Useful if you skipped the setup login step, want to switch handles, or are re-logging without re-running setup. `corten-matrix login` re-runs the terminal flow.
 
-Either path follows the same prompts: Apple ID → password → 2FA (if needed) → handle selection. On macOS, if the Mac is signed into iCloud with the same Apple ID, login completes without 2FA. On Linux, you additionally paste the hardware key from [Step 1](#step-1-extract-hardware-key-one-time-on-a-mac).
+Either path follows the same prompts: Apple ID → password → 2FA (if needed) → handle selection. On macOS, the bridge reads the Mac's hardware identifiers automatically. On Linux, you additionally paste the hardware key from [Step 1](#step-1-extract-hardware-key-one-time-on-a-mac).
 
 If your Apple ID has multiple identities registered (e.g. a phone number and an email address), you'll be asked which one to use for outgoing messages. This is what recipients see your messages "from". To change it later, set `preferred_handle` in the config (see [Configuration](#configuration)) or log in again.
 
