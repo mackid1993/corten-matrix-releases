@@ -80,7 +80,13 @@ jobs:
             echo '::error::Draft release title is required for All platforms.'
             exit 1
           }
-          LATEST_TAG="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          if ! LATEST_TAG="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null)"; then
+            LATEST_TAG=''
+          fi
+          if [ -z "$LATEST_TAG" ] && [ "$BUMP" != manual ]; then
+            echo '::error::No published release exists to bump from; choose manual and enter an exact version.'
+            exit 1
+          fi
           if [ "$BUMP" = manual ]; then
             [ -n "$MANUAL_VERSION" ] || {
               echo '::error::Manual version is required when version selection is manual.'
@@ -124,7 +130,7 @@ jobs:
           {
             echo '## Release version resolved'
             echo
-            echo "Latest published release: \`$LATEST_TAG\`"
+            echo "Latest published release: \`${LATEST_TAG:-none}\`"
             echo "Version selection: \`$VERSION_SELECTION\`"
             echo "Draft release tag: \`$NEXT_TAG\`"
             echo "$TAG_STATUS"

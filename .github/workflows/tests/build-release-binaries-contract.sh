@@ -151,6 +151,10 @@ cat > "$checkout_tmp/resolver-bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 if [ "$1" = api ] && [[ "$2" == */releases/latest ]]; then
+  if [ "${FAKE_NO_RELEASES:-0}" = 1 ]; then
+    printf '%s\n' '{"message":"Not Found","status":"404"}'
+    exit 1
+  fi
   printf '%s\n' "${FAKE_LATEST_TAG:-1.2.3}"
 elif [ "$1" = api ] && [[ "$2" == */git/ref/tags/* ]]; then
   if [ -z "${FAKE_REF:-}" ]; then
@@ -201,6 +205,11 @@ run_resolver manual '' '' '' 1
 run_resolver manual 01.2.3 '' '' 1
 run_resolver patch '' 'commit:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' '' 1
 run_resolver manual 2.3.4 '' true 1
+export FAKE_NO_RELEASES=1
+run_resolver manual 2.0.0 '' '' 0
+require "$RESOLVER_CASE_DIR/output" 'release_tag=2.0.0'
+run_resolver patch '' '' '' 1
+unset FAKE_NO_RELEASES
 
 mode_mac="$checkout_tmp/mode-mac"
 mkdir -p "$mode_mac"
