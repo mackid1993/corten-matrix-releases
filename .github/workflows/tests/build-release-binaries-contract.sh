@@ -102,7 +102,8 @@ done
 require "$RESTORE_EXECUTABLES" 'chmod 0755'
 require "$WORKFLOW" './.github/scripts/restore-downloaded-executables.sh mac opencider/dist'
 require "$WORKFLOW" './.github/scripts/restore-downloaded-executables.sh release dist'
-require "$PRIVATE_CHECKOUT" 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl'
+require "$PRIVATE_CHECKOUT" '"$host_keys" > "$known_hosts"'
+require "$PRIVATE_CHECKOUT" 'unset PRIVATE_GIT_KNOWN_HOSTS'
 require "$PRIVATE_CHECKOUT" 'fetch --quiet --no-tags origin refs/heads/master'
 if grep -Eq -- '--filter=|--depth=' "$PRIVATE_CHECKOUT"; then
   fail 'private checkout must include complete history and blobs for OpenAbsinthe artifact fingerprinting'
@@ -111,18 +112,26 @@ require "$PRIVATE_CHECKOUT" 'checkout --quiet --detach'
 require "$PRIVATE_CHECKOUT" '> "$checkout_log" 2>&1'
 require "$PRIVATE_CHECKOUT" 'rm -f "$key_file" "$known_hosts" "$checkout_log" "$revisions_file"'
 require "$PRIVATE_CHECKOUT" 'unset PRIVATE_REPO_DEPLOY_KEY'
-require "$PRIVATE_CHECKOUT" 'opencider) remote_url=git@github.com:mackid1993/OpenCider.git ;;'
-require "$PRIVATE_CHECKOUT" 'remote_url="${CORTEN_REPO_SSH_URL:-}"'
-require "$PRIVATE_CHECKOUT" 'unset CORTEN_REPO_SSH_URL'
+require "$PRIVATE_CHECKOUT" 'opencider) remote_url="${OPENCIDER_REPO_SSH_URL:-}" ;;'
+require "$PRIVATE_CHECKOUT" 'corten) remote_url="${CORTEN_REPO_SSH_URL:-}" ;;'
+require "$PRIVATE_CHECKOUT" 'unset OPENCIDER_REPO_SSH_URL CORTEN_REPO_SSH_URL'
 # Assembled at runtime so this test does not itself contain the owner name.
 private_owner="lrho""din"
+# Assembled at runtime so this test does not itself contain the private Git host.
+private_host="brust""ein"
+github_ssh="git@""github.com:"
 for tracked in "$WORKFLOW" "$ROOT"/.github/scripts/*.sh "$ROOT"/.github/workflows/tests/*.sh; do
-  if grep -Fqi -- "$private_owner" "$tracked"; then
+  if grep -Fqi -- "$private_owner" "$tracked" || grep -Fqi -- "$private_host" "$tracked" \
+     || grep -Fq -- "$github_ssh" "$tracked"; then
     fail "bridge repository location must come from a secret, not tracked text: ${tracked##*/}"
   fi
 done
 url_count="$(grep -Fc -- 'CORTEN_REPO_SSH_URL: ${{ secrets.CORTEN_REPO_SSH_URL }}' "$WORKFLOW")"
 [ "$url_count" -eq 6 ] || fail "every bridge checkout must receive the secret repository URL (found $url_count)"
+url_count="$(grep -Fc -- 'OPENCIDER_REPO_SSH_URL: ${{ secrets.OPENCIDER_REPO_SSH_URL }}' "$WORKFLOW")"
+[ "$url_count" -eq 6 ] || fail "every OpenCider checkout must receive the secret repository URL (found $url_count)"
+host_key_count="$(grep -Fc -- 'PRIVATE_GIT_KNOWN_HOSTS: ${{ secrets.PRIVATE_GIT_KNOWN_HOSTS }}' "$WORKFLOW")"
+[ "$host_key_count" -eq 12 ] || fail "every private checkout must receive the secret Git host key (found $host_key_count)"
 require "$PRIVATE_CHECKOUT" '-ref-v1:'
 require "$PRIVATE_CHECKOUT" 'hmac.compare_digest'
 require "$PRIVATE_CHECKOUT" 'Private checkout failed. Detailed Git output was intentionally withheld from public Actions logs.'
@@ -380,6 +389,8 @@ chmod +x "$checkout_tmp/bin/git"
 checkout_output="$checkout_tmp/public-output"
 ( cd "$checkout_tmp" && \
   PRIVATE_REPO_DEPLOY_KEY='fixture-key' RUNNER_TEMP="$checkout_tmp/runner" \
+  PRIVATE_GIT_KNOWN_HOSTS='[fixture.invalid]:2222 ssh-ed25519 AAAAfixture' \
+  OPENCIDER_REPO_SSH_URL='ssh://git@fixture.invalid:2222/fixture-owner/overlay.git' \
   PATH="$checkout_tmp/bin:$PATH" "$PRIVATE_CHECKOUT" opencider success master ) \
   > "$checkout_output" 2>&1 \
   || fail 'source-safe private checkout helper rejected a clean synthetic checkout'
@@ -395,6 +406,8 @@ fixture_token="$(FIXTURE_KEY='fixture-key' FIXTURE_SHA="$fixture_sha" python3 -c
 [[ "$fixture_token" =~ ^[0-9a-f]{64}$ ]] || fail 'opaque fixture revision token generation failed'
 ( cd "$checkout_tmp" && \
   PRIVATE_REPO_DEPLOY_KEY='fixture-key' RUNNER_TEMP="$checkout_tmp/runner" \
+  PRIVATE_GIT_KNOWN_HOSTS='[fixture.invalid]:2222 ssh-ed25519 AAAAfixture' \
+  OPENCIDER_REPO_SSH_URL='ssh://git@fixture.invalid:2222/fixture-owner/overlay.git' \
   PATH="$checkout_tmp/bin:$PATH" "$PRIVATE_CHECKOUT" opencider success-token "$fixture_token" ) \
   > "$checkout_output" 2>&1 \
   || fail 'source-safe private checkout helper rejected a valid opaque revision token'
@@ -407,6 +420,8 @@ if compgen -G "$checkout_tmp/runner/private-checkout*" >/dev/null; then
 fi
 if ( cd "$checkout_tmp" && \
   PRIVATE_REPO_DEPLOY_KEY='fixture-key' RUNNER_TEMP="$checkout_tmp/runner" \
+  PRIVATE_GIT_KNOWN_HOSTS='[fixture.invalid]:2222 ssh-ed25519 AAAAfixture' \
+  OPENCIDER_REPO_SSH_URL='ssh://git@fixture.invalid:2222/fixture-owner/overlay.git' \
   FAKE_GIT_FETCH_FAIL=1 PATH="$checkout_tmp/bin:$PATH" \
   "$PRIVATE_CHECKOUT" opencider failure master ) > "$checkout_output" 2>&1; then
   fail 'source-safe private checkout helper accepted a failed fetch'
@@ -420,12 +435,16 @@ if compgen -G "$checkout_tmp/runner/private-checkout*" >/dev/null; then
 fi
 if ( cd "$checkout_tmp" && \
   PRIVATE_REPO_DEPLOY_KEY='fixture-key' RUNNER_TEMP="$checkout_tmp/runner" \
+  PRIVATE_GIT_KNOWN_HOSTS='[fixture.invalid]:2222 ssh-ed25519 AAAAfixture' \
+  OPENCIDER_REPO_SSH_URL='ssh://git@fixture.invalid:2222/fixture-owner/overlay.git' \
   PATH="$checkout_tmp/bin:$PATH" "$PRIVATE_CHECKOUT" unknown-repo bad master ) > "$checkout_output" 2>&1; then
   fail 'source-safe private checkout helper accepted an unknown repository id'
 fi
 ( cd "$checkout_tmp" && \
   PRIVATE_REPO_DEPLOY_KEY='fixture-key' RUNNER_TEMP="$checkout_tmp/runner" \
-  CORTEN_REPO_SSH_URL='git@github.com:fixture-owner/fixture-repo.git' \
+  PRIVATE_GIT_KNOWN_HOSTS='[fixture.invalid]:2222 ssh-ed25519 AAAAfixture' \
+  OPENCIDER_REPO_SSH_URL='ssh://git@fixture.invalid:2222/fixture-owner/overlay.git' \
+  CORTEN_REPO_SSH_URL='ssh://git@fixture.invalid:2222/fixture-owner/fixture-repo.git' \
   PATH="$checkout_tmp/bin:$PATH" "$PRIVATE_CHECKOUT" corten corten-success master ) \
   > "$checkout_output" 2>&1 \
   || fail 'source-safe private checkout helper rejected the bridge repository id'
@@ -433,23 +452,31 @@ corten_token="$(FIXTURE_KEY='fixture-key' FIXTURE_SHA="$fixture_sha" python3 -c 
   'import hashlib,hmac,os; key=os.environ["FIXTURE_KEY"].encode().rstrip(b"\r\n")+b"\n"; message=b"corten-ref-v1:"+os.environ["FIXTURE_SHA"].encode(); print(hmac.new(key,message,hashlib.sha256).hexdigest())')"
 ( cd "$checkout_tmp" && \
   PRIVATE_REPO_DEPLOY_KEY='fixture-key' RUNNER_TEMP="$checkout_tmp/runner" \
-  CORTEN_REPO_SSH_URL='git@github.com:fixture-owner/fixture-repo.git' \
+  PRIVATE_GIT_KNOWN_HOSTS='[fixture.invalid]:2222 ssh-ed25519 AAAAfixture' \
+  OPENCIDER_REPO_SSH_URL='ssh://git@fixture.invalid:2222/fixture-owner/overlay.git' \
+  CORTEN_REPO_SSH_URL='ssh://git@fixture.invalid:2222/fixture-owner/fixture-repo.git' \
   PATH="$checkout_tmp/bin:$PATH" "$PRIVATE_CHECKOUT" corten corten-token "$corten_token" ) \
   > "$checkout_output" 2>&1 \
   || fail 'source-safe private checkout helper rejected a valid bridge token'
 if ( cd "$checkout_tmp" && \
   PRIVATE_REPO_DEPLOY_KEY='fixture-key' RUNNER_TEMP="$checkout_tmp/runner" \
-  CORTEN_REPO_SSH_URL='git@github.com:fixture-owner/fixture-repo.git' \
+  PRIVATE_GIT_KNOWN_HOSTS='[fixture.invalid]:2222 ssh-ed25519 AAAAfixture' \
+  OPENCIDER_REPO_SSH_URL='ssh://git@fixture.invalid:2222/fixture-owner/overlay.git' \
+  CORTEN_REPO_SSH_URL='ssh://git@fixture.invalid:2222/fixture-owner/fixture-repo.git' \
   PATH="$checkout_tmp/bin:$PATH" "$PRIVATE_CHECKOUT" corten corten-cross "$fixture_token" ) > "$checkout_output" 2>&1; then
   fail 'an OpenCider token must not resolve a bridge revision'
 fi
 if ( cd "$checkout_tmp" && \
   PRIVATE_REPO_DEPLOY_KEY='fixture-key' RUNNER_TEMP="$checkout_tmp/runner" \
+  PRIVATE_GIT_KNOWN_HOSTS='[fixture.invalid]:2222 ssh-ed25519 AAAAfixture' \
+  OPENCIDER_REPO_SSH_URL='ssh://git@fixture.invalid:2222/fixture-owner/overlay.git' \
   PATH="$checkout_tmp/bin:$PATH" "$PRIVATE_CHECKOUT" corten corten-no-url master ) > "$checkout_output" 2>&1; then
   fail 'bridge checkout must fail when the repository URL secret is missing'
 fi
 if ( cd "$checkout_tmp" && \
   PRIVATE_REPO_DEPLOY_KEY='fixture-key' RUNNER_TEMP="$checkout_tmp/runner" \
+  PRIVATE_GIT_KNOWN_HOSTS='[fixture.invalid]:2222 ssh-ed25519 AAAAfixture' \
+  OPENCIDER_REPO_SSH_URL='ssh://git@fixture.invalid:2222/fixture-owner/overlay.git' \
   CORTEN_REPO_SSH_URL='https://example.invalid/x;rm -rf /' \
   PATH="$checkout_tmp/bin:$PATH" "$PRIVATE_CHECKOUT" corten corten-bad-url master ) > "$checkout_output" 2>&1; then
   fail 'bridge checkout must reject a malformed repository URL'
@@ -636,7 +663,7 @@ for forbidden in ('set -x', 'set -o xtrace', 'tee ', 'printenv'):
     if forbidden in workflow:
         raise SystemExit(f'public workflow contains a log- or cache-leak primitive: {forbidden}')
 secret_names = re.findall(r'secrets\.([A-Za-z0-9_]+)', workflow)
-if set(secret_names) != {'OPENCIDER_READ_DEPLOY_KEY', 'CORTEN_READ_DEPLOY_KEY', 'CORTEN_REPO_SSH_URL'} or len(secret_names) != 18:
+if set(secret_names) != {'OPENCIDER_READ_DEPLOY_KEY', 'CORTEN_READ_DEPLOY_KEY', 'CORTEN_REPO_SSH_URL', 'OPENCIDER_REPO_SSH_URL', 'PRIVATE_GIT_KNOWN_HOSTS'} or len(secret_names) != 36:
     raise SystemExit(f'unexpected workflow secret surface: {secret_names!r}')
 if workflow.count('contents: write') != 1:
     raise SystemExit('only the separate release job may receive contents: write')

@@ -13,16 +13,18 @@ fail() {
 repo_id="$1"
 destination="$2"
 requested_ref_token="$3"
+# Both repository locations and the Git host key are supplied only through
+# secrets, so no private host, owner, or repository name appears in tracked text.
 case "$repo_id" in
-  opencider) remote_url=git@github.com:mackid1993/OpenCider.git ;;
-  corten)
-    # The bridge repository location is supplied only through a secret.
-    remote_url="${CORTEN_REPO_SSH_URL:-}"
-    unset CORTEN_REPO_SSH_URL
-    [[ "$remote_url" =~ ^git@github\.com:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git$ ]] || fail
-    ;;
+  opencider) remote_url="${OPENCIDER_REPO_SSH_URL:-}" ;;
+  corten) remote_url="${CORTEN_REPO_SSH_URL:-}" ;;
   *) fail ;;
 esac
+unset OPENCIDER_REPO_SSH_URL CORTEN_REPO_SSH_URL
+[[ "$remote_url" =~ ^ssh://git@[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git$ ]] || fail
+host_keys="${PRIVATE_GIT_KNOWN_HOSTS:-}"
+unset PRIVATE_GIT_KNOWN_HOSTS
+[ -n "$host_keys" ] || fail
 case "$destination" in
   ''|/*|*'..'*) fail ;;
 esac
@@ -49,9 +51,7 @@ trap cleanup EXIT
 
 printf '%s\n' "$PRIVATE_REPO_DEPLOY_KEY" > "$key_file"
 unset PRIVATE_REPO_DEPLOY_KEY
-printf '%s\n' \
-  'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
-  > "$known_hosts"
+printf '%s\n' "$host_keys" > "$known_hosts"
 export GIT_SSH_COMMAND="ssh -i $key_file -o IdentitiesOnly=yes -o HostKeyAlgorithms=ssh-ed25519 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts"
 
 perform_checkout() {

@@ -1,8 +1,8 @@
 name: Build release binaries
 
 # This public repository holds only release tooling. Both build inputs are private:
-# the bridge source (location supplied only by the CORTEN_REPO_SSH_URL secret) and
-# the OpenCider overlay (mackid1993/OpenCider). They are checked out only by manual jobs started by
+# the bridge source and the OpenCider overlay. Their locations and the Git host
+# key are supplied only by secrets. They are checked out only by manual jobs started by
 # trusted writers of this repository. Never add a push, PR, pull_request_target,
 # workflow_run, or repository_dispatch trigger here: this workflow receives two
 # read-only deploy-key secrets.
@@ -155,6 +155,7 @@ jobs:
         id: corten
         env:
           PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.CORTEN_READ_DEPLOY_KEY }}
+          PRIVATE_GIT_KNOWN_HOSTS: ${{ secrets.PRIVATE_GIT_KNOWN_HOSTS }}
           CORTEN_REPO_SSH_URL: ${{ secrets.CORTEN_REPO_SSH_URL }}
         run: |
           set -euo pipefail
@@ -184,6 +185,8 @@ jobs:
         id: opencider
         env:
           PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.OPENCIDER_READ_DEPLOY_KEY }}
+          PRIVATE_GIT_KNOWN_HOSTS: ${{ secrets.PRIVATE_GIT_KNOWN_HOSTS }}
+          OPENCIDER_REPO_SSH_URL: ${{ secrets.OPENCIDER_REPO_SSH_URL }}
         run: |
           set -euo pipefail
           ./.github/scripts/checkout-private-repo.sh opencider opencider master
@@ -249,6 +252,7 @@ jobs:
       - name: Check out private bridge source
         env:
           PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.CORTEN_READ_DEPLOY_KEY }}
+          PRIVATE_GIT_KNOWN_HOSTS: ${{ secrets.PRIVATE_GIT_KNOWN_HOSTS }}
           CORTEN_REPO_SSH_URL: ${{ secrets.CORTEN_REPO_SSH_URL }}
           CORTEN_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.corten_ref_token }}
         run: ./.github/scripts/checkout-private-repo.sh corten corten "$CORTEN_REF_TOKEN"
@@ -256,6 +260,8 @@ jobs:
       - name: Check out private OpenCider
         env:
           PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.OPENCIDER_READ_DEPLOY_KEY }}
+          PRIVATE_GIT_KNOWN_HOSTS: ${{ secrets.PRIVATE_GIT_KNOWN_HOSTS }}
+          OPENCIDER_REPO_SSH_URL: ${{ secrets.OPENCIDER_REPO_SSH_URL }}
           OPENCIDER_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.opencider_ref_token }}
         run: ./.github/scripts/checkout-private-repo.sh opencider opencider "$OPENCIDER_REF_TOKEN"
 
@@ -324,6 +330,7 @@ jobs:
       - name: Check out private bridge source
         env:
           PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.CORTEN_READ_DEPLOY_KEY }}
+          PRIVATE_GIT_KNOWN_HOSTS: ${{ secrets.PRIVATE_GIT_KNOWN_HOSTS }}
           CORTEN_REPO_SSH_URL: ${{ secrets.CORTEN_REPO_SSH_URL }}
           CORTEN_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.corten_ref_token }}
         run: ./.github/scripts/checkout-private-repo.sh corten corten "$CORTEN_REF_TOKEN"
@@ -331,6 +338,8 @@ jobs:
       - name: Check out private OpenCider
         env:
           PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.OPENCIDER_READ_DEPLOY_KEY }}
+          PRIVATE_GIT_KNOWN_HOSTS: ${{ secrets.PRIVATE_GIT_KNOWN_HOSTS }}
+          OPENCIDER_REPO_SSH_URL: ${{ secrets.OPENCIDER_REPO_SSH_URL }}
           OPENCIDER_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.opencider_ref_token }}
         run: ./.github/scripts/checkout-private-repo.sh opencider opencider "$OPENCIDER_REF_TOKEN"
 
@@ -399,6 +408,7 @@ jobs:
       - name: Check out private bridge source
         env:
           PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.CORTEN_READ_DEPLOY_KEY }}
+          PRIVATE_GIT_KNOWN_HOSTS: ${{ secrets.PRIVATE_GIT_KNOWN_HOSTS }}
           CORTEN_REPO_SSH_URL: ${{ secrets.CORTEN_REPO_SSH_URL }}
           CORTEN_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.corten_ref_token }}
         run: ./.github/scripts/checkout-private-repo.sh corten corten "$CORTEN_REF_TOKEN"
@@ -406,6 +416,8 @@ jobs:
       - name: Check out private OpenCider
         env:
           PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.OPENCIDER_READ_DEPLOY_KEY }}
+          PRIVATE_GIT_KNOWN_HOSTS: ${{ secrets.PRIVATE_GIT_KNOWN_HOSTS }}
+          OPENCIDER_REPO_SSH_URL: ${{ secrets.OPENCIDER_REPO_SSH_URL }}
           OPENCIDER_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.opencider_ref_token }}
         run: ./.github/scripts/checkout-private-repo.sh opencider opencider "$OPENCIDER_REF_TOKEN"
 
@@ -470,6 +482,7 @@ jobs:
       - name: Check out private bridge source
         env:
           PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.CORTEN_READ_DEPLOY_KEY }}
+          PRIVATE_GIT_KNOWN_HOSTS: ${{ secrets.PRIVATE_GIT_KNOWN_HOSTS }}
           CORTEN_REPO_SSH_URL: ${{ secrets.CORTEN_REPO_SSH_URL }}
           CORTEN_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.corten_ref_token }}
         run: ./.github/scripts/checkout-private-repo.sh corten corten "$CORTEN_REF_TOKEN"
@@ -477,6 +490,8 @@ jobs:
       - name: Check out private OpenCider
         env:
           PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.OPENCIDER_READ_DEPLOY_KEY }}
+          PRIVATE_GIT_KNOWN_HOSTS: ${{ secrets.PRIVATE_GIT_KNOWN_HOSTS }}
+          OPENCIDER_REPO_SSH_URL: ${{ secrets.OPENCIDER_REPO_SSH_URL }}
           OPENCIDER_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.opencider_ref_token }}
         run: ./.github/scripts/checkout-private-repo.sh opencider opencider "$OPENCIDER_REF_TOKEN"
 
@@ -544,6 +559,7 @@ jobs:
       - name: Check out private bridge source
         env:
           PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.CORTEN_READ_DEPLOY_KEY }}
+          PRIVATE_GIT_KNOWN_HOSTS: ${{ secrets.PRIVATE_GIT_KNOWN_HOSTS }}
           CORTEN_REPO_SSH_URL: ${{ secrets.CORTEN_REPO_SSH_URL }}
           CORTEN_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.corten_ref_token }}
         run: ./.github/scripts/checkout-private-repo.sh corten corten "$CORTEN_REF_TOKEN"
@@ -551,6 +567,8 @@ jobs:
       - name: Check out private OpenCider finalizer
         env:
           PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.OPENCIDER_READ_DEPLOY_KEY }}
+          PRIVATE_GIT_KNOWN_HOSTS: ${{ secrets.PRIVATE_GIT_KNOWN_HOSTS }}
+          OPENCIDER_REPO_SSH_URL: ${{ secrets.OPENCIDER_REPO_SSH_URL }}
           OPENCIDER_REF_TOKEN: ${{ needs.verify-rustpush-patches.outputs.opencider_ref_token }}
         run: ./.github/scripts/checkout-private-repo.sh opencider opencider "$OPENCIDER_REF_TOKEN"
 
