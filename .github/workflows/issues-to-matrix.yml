@@ -1,0 +1,103 @@
+name: Post issues to Matrix
+
+# Announces issue activity in the project's Matrix room. Untrusted issue text is
+# read only from the event JSON file inside Python, never interpolated into a
+# shell command. The Matrix homeserver, room and bot token come from secrets.
+on:
+  issues:
+    types: [opened, closed, reopened]
+
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Send formatted notice to Matrix
+        env:
+          MATRIX_HOMESERVER: ${{ secrets.MATRIX_HOMESERVER }}
+          MATRIX_ROOM_ID: ${{ secrets.MATRIX_ROOM_ID }}
+          MATRIX_BOT_TOKEN: ${{ secrets.MATRIX_BOT_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import html, json, os, urllib.parse, urllib.request
+
+          ev = json.load(open(os.environ["GITHUB_EVENT_PATH"]))
+          action = ev["action"]
+          issue = ev["issue"]
+          repo = ev["repository"]["full_name"]
+          num = issue["number"]
+          title = issue["title"]
+          url = issue["html_url"]
+          actor = ev["sender"]["login"]
+          actor_url = ev["sender"]["html_url"]
+          labels = [l["name"] for l in issue.get("labels", [])]
+          e = html.escape
+
+          def render(md):
+              # GitHub's own renderer gives sanitized HTML; fall back to plain text.
+              try:
+                  req = urllib.request.Request(
+                      "https://api.github.com/markdown",
+                      data=json.dumps({"text": md, "mode": "gfm", "context": repo}).encode(),
+                      headers={"Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                               "Accept": "application/vnd.github+json",
+                               "Content-Type": "application/json"})
+                  with urllib.request.urlopen(req, timeout=20) as r:
+                      return r.read().decode()
+              except Exception:
+                  return "<p>" + e(md).replace("\n", "<br>") + "</p>"
+
+          def excerpt(text, limit=700, max_lines=15):
+              text = (text or "").strip()
+              lines = text.splitlines()
+              if len(text) <= limit and len(lines) <= max_lines:
+                  return text, False
+              cut_text = "\n".join(lines[:max_lines])
+              if len(cut_text) > limit:
+                  cut = cut_text.rfind("\n", 0, limit)
+                  cut_text = cut_text[:cut if cut > limit // 2 else limit]
+              if cut_text.count("```") % 2:  # don't leave a code block open
+                  cut_text += "\n```"
+              return cut_text, True
+
+          link = f'<a href="{e(url)}"><b>#{num}: {e(title)}</b></a>'
+          who = f'<a href="{e(actor_url)}">@{e(actor)}</a>'
+          label_html = " ".join(f"<code>{e(l)}</code>" for l in labels)
+
+          if action == "opened":
+              head = f"🆕 <b>New issue</b> {link}"
+              meta = f"👤 {who}" + (f" · 🏷️ {label_html}" if labels else "")
+              body_md, truncated = excerpt(issue.get("body"))
+              parts = [head, meta]
+              if body_md:
+                  parts.append("<blockquote>" + render(body_md) + "</blockquote>")
+              if truncated:
+                  parts.append(f'<a href="{e(url)}">Read the full issue on GitHub →</a>')
+              formatted = "<br>".join(parts[:2]) + "".join(parts[2:])
+              plain = f"🆕 New issue #{num}: {title}\nby @{actor}\n{url}"
+          elif action == "closed":
+              reason = issue.get("state_reason") or "completed"
+              icon, word = ("✅", "Closed") if reason == "completed" else ("🚫", "Closed as not planned")
+              formatted = f"{icon} <b>{word}</b> {link}<br>👤 {who}"
+              plain = f"{icon} {word} #{num}: {title}\nby @{actor}\n{url}"
+          else:  # reopened
+              formatted = f"🔁 <b>Reopened</b> {link}<br>👤 {who}"
+              plain = f"🔁 Reopened #{num}: {title}\nby @{actor}\n{url}"
+
+          content = {"msgtype": "m.notice", "body": plain,
+                     "format": "org.matrix.custom.html", "formatted_body": formatted}
+          hs = os.environ["MATRIX_HOMESERVER"].rstrip("/")
+          room = urllib.parse.quote(os.environ["MATRIX_ROOM_ID"], safe="")
+          txn = f"gh-{os.environ['GITHUB_RUN_ID']}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
+          req = urllib.request.Request(
+              f"{hs}/_matrix/client/v3/rooms/{room}/send/m.room.message/{txn}",
+              data=json.dumps(content).encode(), method="PUT",
+              headers={"Authorization": "Bearer " + os.environ["MATRIX_BOT_TOKEN"],
+                       "Content-Type": "application/json"})
+          with urllib.request.urlopen(req, timeout=30) as r:
+              r.read()
+          print(f"Posted {action} notice for issue #{num}")
+          PY
