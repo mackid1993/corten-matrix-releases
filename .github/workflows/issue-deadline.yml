@@ -1,6 +1,6 @@
 name: Issue deadline timer
 
-# One timer per new outside issue: wait out the Matrix ID deadline, then run
+# One timer per new issue: wait out the Matrix ID deadline, then run
 # the deadline sweep in issues-to-matrix.yml. This doesn't depend on GitHub's
 # scheduler, which can delay or skip cron runs. Kept in its own workflow so the
 # waiting job doesn't block that issue's comment handling.
@@ -16,9 +16,6 @@ permissions:
 
 jobs:
   timer:
-    if: >-
-      !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) ||
-      contains(github.event.issue.body, '<!-- matrix-id-gate-test -->')
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:

@@ -225,15 +225,13 @@ jobs:
           num = issue["number"]
           labels = [l["name"] for l in issue.get("labels", [])]
           body = issue.get("body") or ""
-          test = TEST_MARK in body
-          author_team = is_team(issue.get("author_association")) and not test
+          author_team = is_team(issue.get("author_association"))
           action = ev["action"]
 
           if EVENT == "issues":
               if action == "opened":
-                  if author_team:
-                      notify("new", issue, ev["sender"])
-                  elif MXID.search(issue["title"]) or MXID.search(body):
+                  # Everyone, maintainers included, gives a Matrix ID the same way.
+                  if MXID.search(issue["title"]) or MXID.search(body):
                       violation(issue, "the title or description")
                   else:
                       ensure_label(AWAIT, "fbca04", "Waiting for the reporter's Matrix ID")
@@ -241,7 +239,7 @@ jobs:
                       gh("POST", f"/issues/{num}/comments", {"body": INSTRUCTIONS})
                       print(f"#{num}: asked for Matrix ID")
               elif action == "edited":
-                  if not author_team and ev["sender"]["login"] == issue["user"]["login"] \
+                  if ev["sender"]["login"] == issue["user"]["login"] \
                           and (MXID.search(issue["title"]) or MXID.search(body)):
                       violation(issue, "the title or description")
               elif action == "reopened":
@@ -256,7 +254,9 @@ jobs:
           elif EVENT == "issue_comment":
               c = ev["comment"]
               by_author = c["user"]["login"] == issue["user"]["login"]
-              commenter_team = is_team(c.get("author_association")) and not (test and by_author)
+              # The issue author's comments are always handled. Maintainers commenting on
+              # someone else's issue may mention Matrix IDs freely.
+              commenter_team = is_team(c.get("author_association")) and not by_author
               if not commenter_team and MXID.search(c["body"] or ""):
                   if by_author and AWAIT in labels and issue["state"] == "open":
                       try:
