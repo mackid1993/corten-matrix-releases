@@ -16,6 +16,11 @@ on:
     # Off-peak minutes: GitHub delays or drops runs at busy times like :00.
     - cron: "7,17,27,37,47,57 * * * *"
   workflow_dispatch:
+    inputs:
+      deadline_minutes:
+        description: "Testing only: treat issues as expired after this many minutes (blank = 60)"
+        required: false
+        default: ""
 
 permissions:
   issues: write
@@ -37,6 +42,7 @@ jobs:
           INBOX_URL: ${{ secrets.INBOX_URL }}
           INBOX_TOKEN: ${{ secrets.INBOX_TOKEN }}
           GH_TOKEN: ${{ github.token }}
+          DEADLINE_OVERRIDE: ${{ inputs.deadline_minutes }}
         run: |
           python3 - <<'PY'
           import datetime, html, json, os, re, sys, urllib.error, urllib.parse, urllib.request
@@ -48,6 +54,10 @@ jobs:
           AWAIT, FAILED = "awaiting-matrix-id", "missing-matrix-id"
           TEST_MARK = "<!-- matrix-id-gate-test -->"
           DEADLINE = datetime.timedelta(hours=1)
+          _o = (os.environ.get("DEADLINE_OVERRIDE") or "").strip()
+          if EVENT == "workflow_dispatch" and _o.isdigit() and 0 < int(_o) <= 60:
+              DEADLINE = datetime.timedelta(minutes=int(_o))
+              print(f"Deadline override for this run: {_o} minutes")
           MXID = re.compile(r"@[A-Za-z0-9._=/+\-]+:[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}(?::\d+)?")
           e = html.escape
 
