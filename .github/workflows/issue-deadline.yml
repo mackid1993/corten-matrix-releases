@@ -1,0 +1,39 @@
+name: Issue deadline timer
+
+# One timer per new outside issue: wait out the Matrix ID deadline, then run
+# the deadline sweep in issues-to-matrix.yml. This doesn't depend on GitHub's
+# scheduler, which can delay or skip cron runs. Kept in its own workflow so the
+# waiting job doesn't block that issue's comment handling.
+#
+# Testing: set the repository variable DEADLINE_TEST_MINUTES (1-60) to shorten
+# both the wait and the deadline, then delete the variable afterward.
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  actions: write
+
+jobs:
+  timer:
+    if: >-
+      !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) ||
+      contains(github.event.issue.body, '<!-- matrix-id-gate-test -->')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - name: Wait for the deadline, then run the sweep
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_MINUTES: ${{ vars.DEADLINE_TEST_MINUTES }}
+        run: |
+          set -euo pipefail
+          if [[ "$TEST_MINUTES" =~ ^[0-9]+$ ]] && (( TEST_MINUTES >= 1 && TEST_MINUTES <= 60 )); then
+            echo "Test mode: ${TEST_MINUTES}-minute deadline"
+            sleep $(( TEST_MINUTES * 60 + 30 ))
+            gh workflow run issues-to-matrix.yml -R "$GITHUB_REPOSITORY" -f deadline_minutes="$TEST_MINUTES"
+          else
+            sleep 3630
+            gh workflow run issues-to-matrix.yml -R "$GITHUB_REPOSITORY"
+          fi
+          echo "Deadline sweep started"
