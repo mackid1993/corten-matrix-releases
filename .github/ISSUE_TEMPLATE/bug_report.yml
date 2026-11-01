@@ -41,6 +41,8 @@ body:
     id: platform
     attributes:
       label: Platform
+      description: Select every platform where you see the problem.
+      multiple: true
       options:
         - macOS (Apple Silicon)
         - macOS (Intel)
@@ -52,16 +54,28 @@ body:
   - type: input
     id: os
     attributes:
-      label: OS version and setup
-      description: For example "macOS 27.0.1" or "Ubuntu 24.04 in Docker".
+      label: OS version and machine
+      description: For example "macOS 27.0.1 on a Mac mini" or "Ubuntu 24.04 on bare metal". The bridge is supported running natively; Docker is not supported.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: homeserver
+    attributes:
+      label: Homeserver
+      description: How you set up the bridge.
+      multiple: true
+      options:
+        - Beeper (corten-matrix setup-beeper)
+        - Self-hosted homeserver (corten-matrix setup)
     validations:
       required: true
 
   - type: input
-    id: matrix_setup
+    id: matrix_client
     attributes:
-      label: Homeserver and Matrix client
-      description: For example "Beeper" or "Synapse with Element".
+      label: Matrix client
+      description: For example "Beeper iOS" or "Element desktop".
     validations:
       required: false
 
@@ -88,7 +102,7 @@ body:
     id: logs
     attributes:
       label: Relevant log lines
-      description: Just the lines around the problem. Remove phone numbers, emails and message text. We'll ask for full logs on Matrix if we need them.
+      description: Run `corten-matrix logs` and paste just the lines around the problem. Remove phone numbers, emails and message text. We'll ask for full logs on Matrix if we need them.
       render: text
     validations:
       required: false
