@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest something new for the bridge.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We're mostly focused on bugs right now, so feature requests may wait a while.
+
+        ### How to give us your Matrix ID (required, and kept private only this way)
+
+        We fix bugs by working with you directly on Matrix. **Don't put your Matrix ID in this form.** Instead:
+
+        1. Submit this issue.
+        2. **Within 1 hour**, reply to it with a comment that contains **only** your Matrix ID, like `@you:beeper.com`.
+        3. A bot deletes that comment within seconds and sends your ID privately to the maintainers.
+
+        - **No reply within 1 hour:** the issue is closed automatically.
+        - **Matrix ID put anywhere else** (title, this form, any other comment): it's public, and the issue is closed and locked. If that happens, it's because the steps above weren't followed.
+        - Your reply is visible on GitHub for a few seconds before the bot removes it, and may be included in email notifications to people watching this repository.
+
+  - type: textarea
+    id: request
+    attributes:
+      label: What would you like?
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why would it help?
+      description: The problem it solves for you.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: agreements
+    attributes:
+      label: Before you submit
+      options:
+        - label: I will reply with only my Matrix ID as a comment within 1 hour, and I won't put it anywhere else.
+          required: true

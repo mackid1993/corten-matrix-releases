@@ -1,0 +1,106 @@
+name: Bug report
+description: Something in the bridge isn't working.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Please read before filing
+
+        Many bridge bugs only happen with a specific account, chat history or device setup. If we can't reproduce your problem on our own machines, we can't fix it. So we will usually message you on Matrix and may ask for:
+
+        - your full bridge logs
+        - your bridge database
+
+        These contain personal data, such as contacts, phone numbers and message content. We use them only to find and fix your bug, we don't share them, and we delete them when we're done. Sending them is your choice, but without them we often can't help.
+
+        ### How to give us your Matrix ID (required, and kept private only this way)
+
+        We fix bugs by working with you directly on Matrix. **Don't put your Matrix ID in this form.** Instead:
+
+        1. Submit this issue.
+        2. **Within 1 hour**, reply to it with a comment that contains **only** your Matrix ID, like `@you:beeper.com`.
+        3. A bot deletes that comment within seconds and sends your ID privately to the maintainers.
+
+        - **No reply within 1 hour:** the issue is closed automatically.
+        - **Matrix ID put anywhere else** (title, this form, any other comment): it's public, and the issue is closed and locked. If that happens, it's because the steps above weren't followed.
+        - Your reply is visible on GitHub for a few seconds before the bot removes it, and may be included in email notifications to people watching this repository.
+
+        Problems with your Apple account itself (for example, it also fails in Apple's Messages app) usually aren't bridge bugs.
+
+  - type: input
+    id: version
+    attributes:
+      label: Bridge version
+      description: The release you downloaded, from the Releases page.
+      placeholder: "2.0.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux amd64
+        - Linux arm64
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS version and setup
+      description: For example "macOS 27.0.1" or "Ubuntu 24.04 in Docker".
+    validations:
+      required: true
+
+  - type: input
+    id: matrix_setup
+    attributes:
+      label: Homeserver and Matrix client
+      description: For example "Beeper" or "Synapse with Element".
+    validations:
+      required: false
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: Just the lines around the problem. Remove phone numbers, emails and message text. We'll ask for full logs on Matrix if we need them.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: agreements
+    attributes:
+      label: Before you submit
+      options:
+        - label: This happens on the latest release.
+          required: true
+        - label: I understand you may contact me on Matrix and ask for my logs and bridge database, and that some bugs can't be fixed without them.
+          required: true
+        - label: I will reply with only my Matrix ID as a comment within 1 hour, and I won't put it anywhere else.
+          required: true
