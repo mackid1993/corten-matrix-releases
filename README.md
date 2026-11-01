@@ -1,6 +1,39 @@
+<div align="center">
+
+<img src=".github/assets/logo.png" alt="Corten-Matrix logo" width="200">
+
 # Corten-Matrix
 
-A Matrix–iMessage puppeting bridge built on [rustpush](https://github.com/OpenBubbles/rustpush). Send and receive iMessages from any Matrix client. It connects directly to Apple's iMessage servers without SIP bypass, Barcelona, or relay servers.
+### iMessage, on any Matrix client.
+
+A native Matrix–iMessage puppeting bridge built on [rustpush](https://github.com/OpenBubbles/rustpush).<br>
+No SIP bypass. No Barcelona. No relay servers. Just Apple's iMessage servers, directly.
+
+<br>
+
+[![Latest release](https://img.shields.io/github/v/release/mackid1993/corten-matrix-releases?style=for-the-badge&label=release&color=009DDC)](https://github.com/mackid1993/corten-matrix-releases/releases/latest)
+[![Released](https://img.shields.io/github/release-date/mackid1993/corten-matrix-releases?style=for-the-badge&label=released&color=FDB827)](https://github.com/mackid1993/corten-matrix-releases/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/mackid1993/corten-matrix-releases/total?style=for-the-badge&color=61BB46)](https://github.com/mackid1993/corten-matrix-releases/releases)
+[![Open issues](https://img.shields.io/github/issues/mackid1993/corten-matrix-releases?style=for-the-badge&color=E03A3E)](https://github.com/mackid1993/corten-matrix-releases/issues)
+
+[![macOS](https://img.shields.io/badge/macOS-universal-963D97?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/mackid1993/corten-matrix-releases/releases/latest)
+[![Linux](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-963D97?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/mackid1993/corten-matrix-releases/releases/latest)
+[![Matrix](https://img.shields.io/badge/Matrix-Beeper%20%7C%20self--hosted-000000?style=for-the-badge&logo=matrix&logoColor=white)](#how-its-distributed)
+[![License](https://img.shields.io/badge/license-PolyForm%20NC-F5821F?style=for-the-badge)](LICENSE.md)
+
+<br>
+
+**[⬇️ Download](https://github.com/mackid1993/corten-matrix-releases/releases/latest)** &nbsp;·&nbsp; **[🧰 CLI](#the-corten-matrix-cli)** &nbsp;·&nbsp; **[🩺 Troubleshooting](#troubleshooting)** &nbsp;·&nbsp; **[🐞 Report a bug](https://github.com/mackid1993/corten-matrix-releases/issues/new/choose)**
+
+<br>
+
+| 💬 Messaging | 📎 Media | 👀 Presence | ☁️ iCloud |
+|:---:|:---:|:---:|:---:|
+| Tapbacks, edits, unsends, groups, SMS | Photos, video, audio, files | Typing, read receipts, Focus status | Shared Albums, Name and Photo Sharing |
+
+</div>
+
+---
 
 **Features**: text, images, video, audio, files, reactions/tapbacks, edits, unsends, typing indicators, read receipts, group chats, SMS forwarding, contact name resolution, incoming **FaceTime call notices**, **iOS 18 Focus / Do Not Disturb status** for contacts, **iCloud Shared Albums**, and **Name & Photo Sharing** fallback for unknown senders.
 
