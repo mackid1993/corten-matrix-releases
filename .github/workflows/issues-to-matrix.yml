@@ -25,8 +25,10 @@ on:
 permissions:
   issues: write
 
+# Deadline sweeps (timer and schedule) share one queue so two never close the
+# same issue at once. Issue and comment events queue per issue.
 concurrency:
-  group: issue-${{ github.event.issue.number || github.run_id }}
+  group: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'deadline-sweep' || format('issue-{0}', github.event.issue.number) }}
   cancel-in-progress: false
 
 jobs:
@@ -269,7 +271,7 @@ jobs:
                    os.environ["MATRIX_BOT_TOKEN"], content)
               print(f"Posted {kind} notice for #{num}")
 
-          # ---------- deadline sweep (every run, plus the schedule) ----------
+          # ---------- deadline sweep (timer and schedule runs only) ----------
           def sweep():
               now = datetime.datetime.now(datetime.timezone.utc)
               for issue in gh("GET", f"/issues?state=open&labels={AWAIT}&per_page=100") or []:
@@ -346,6 +348,4 @@ jobs:
                       print(f"#{num}: removed a Matrix ID posted by someone else")
               elif ev["action"] == "created":
                   notify("comment", issue, c["user"], comment=c)
-
-          sweep()
           PY
