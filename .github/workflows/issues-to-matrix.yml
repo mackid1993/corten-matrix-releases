@@ -61,6 +61,42 @@ jobs:
           MXID = re.compile(r"@[A-Za-z0-9._=/+\-]+:[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}(?::\d+)?")
           e = html.escape
 
+          # Lenient parsing for the reporter's contact reply. People write Matrix IDs in many
+          # ways; accept them all and record a best guess for the maintainers.
+          HOST = r"[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}(?::\d+)?"
+          LOCAL = r"[A-Za-z0-9._=/+\-]+"
+          def contact_guesses(text):
+              t = text.strip()
+              found = []
+              def add(g):
+                  if g not in found:
+                      found.append(g)
+              for m in re.finditer(r"matrix\.to/#/(@" + LOCAL + ":" + HOST + ")", t):
+                  add(m.group(1))
+              for m in re.finditer(r"(?<![\w@])@?(" + LOCAL + "):(" + HOST + ")", t):
+                  add(f"@{m.group(1)}:{m.group(2)}")
+              for m in re.finditer(r"(?<![\w@])@?(" + LOCAL + ")@(" + HOST + ")", t):
+                  add(f"@{m.group(1)}:{m.group(2)} (written like an email)")
+              if not found:
+                  m = re.search(r"(?<![\w])@(" + LOCAL + r")$", t) or re.search(r"(?<![\w])@(" + LOCAL + r")\s", t)
+                  if m:
+                      add(f"@{m.group(1)} (no server given; probably @{m.group(1)}:beeper.com)")
+              if not found:
+                  words = re.findall(LOCAL, t)
+                  if len(t) <= 40 and len(words) == 1:
+                      add(f"{words[0]} (bare username; probably @{words[0]}:beeper.com)")
+              return found
+
+          def looks_like_contact(text):
+              t = (text or "").strip()
+              if not t:
+                  return False
+              if len(t) > 200:  # long comments count only with a clear Matrix ID
+                  return bool(MXID.search(t)) or "matrix.to/" in t
+              if contact_guesses(t):
+                  return True
+              return len(t) <= 80 and "\n" not in t
+
           def http(method, url, token, data=None, scheme="Bearer", raw=False):
               req = urllib.request.Request(url, method=method,
                   data=json.dumps(data).encode() if data is not None else None,
@@ -90,6 +126,7 @@ jobs:
               "👋 Thanks for filing this. **One more step, within 1 hour:**\n\n"
               "Reply to this issue with a comment that contains **only your Matrix ID**, for example:\n\n"
               "```\n@you:beeper.com\n```\n\n"
+              "Any format is fine (`you:beeper.com`, `you@beeper.com`, a matrix.to link). We'll work it out.\n\n"
               "A bot deletes that comment within seconds and sends your Matrix ID privately to the "
               "maintainers, so it doesn't stay on this page.\n\n"
               "⚠️ **Don't put your Matrix ID anywhere else** (the title, the description, or any other "
@@ -134,9 +171,10 @@ jobs:
               print(f"#{num}: Matrix ID posted in {where}; closed and locked")
 
           def mirror_to_inbox(issue, comment):
-              ids = sorted(set(m.group(0) for m in MXID.finditer(comment["body"])))
+              guesses = contact_guesses(comment["body"] or "")
               lines = [
-                  f"**Matrix ID:** {', '.join('`' + i + '`' for i in ids)}",
+                  "**Matrix ID (best guess):** " + (", ".join("`" + g + "`" for g in guesses)
+                                                   if guesses else "not recognized, see the reply below"),
                   f"**GitHub issue:** {issue['html_url']}",
                   f"**Reporter:** [@{issue['user']['login']}]({issue['user']['html_url']})",
                   f"**Opened:** {issue['created_at']}",
@@ -257,28 +295,30 @@ jobs:
               # The issue author's comments are always handled. Maintainers commenting on
               # someone else's issue may mention Matrix IDs freely.
               commenter_team = is_team(c.get("author_association")) and not by_author
-              if not commenter_team and MXID.search(c["body"] or ""):
-                  if by_author and AWAIT in labels and issue["state"] == "open":
-                      try:
-                          vnum = mirror_to_inbox(issue, c)
-                      except Exception as err:
-                          gh("DELETE", f"/issues/comments/{c['id']}", ok=(404,))
-                          gh("POST", f"/issues/{num}/comments", {"body": RETRY})
-                          print(f"#{num}: private tracker mirror failed: {type(err).__name__}")
-                          sys.exit(1)
+              cbody = c["body"] or ""
+              if by_author and AWAIT in labels and issue["state"] == "open" and looks_like_contact(cbody):
+                  # The reporter's contact reply: accepted in any format.
+                  try:
+                      vnum = mirror_to_inbox(issue, c)
+                  except Exception as err:
                       gh("DELETE", f"/issues/comments/{c['id']}", ok=(404,))
-                      gh("DELETE", f"/issues/{num}/labels/{AWAIT}", ok=(404,))
-                      gh("POST", f"/issues/{num}/comments", {"body": ACCEPTED})
-                      print(f"#{num}: Matrix ID accepted, mirrored to private tracker #{vnum}, comment deleted")
-                      issue["labels"] = [l for l in issue["labels"] if l["name"] != AWAIT]
-                      notify("new", issue, ev["sender"])
+                      gh("POST", f"/issues/{num}/comments", {"body": RETRY})
+                      print(f"#{num}: private tracker mirror failed: {type(err).__name__}")
+                      sys.exit(1)
+                  gh("DELETE", f"/issues/comments/{c['id']}", ok=(404,))
+                  gh("DELETE", f"/issues/{num}/labels/{AWAIT}", ok=(404,))
+                  gh("POST", f"/issues/{num}/comments", {"body": ACCEPTED})
+                  print(f"#{num}: contact reply accepted, mirrored to private tracker #{vnum}, comment deleted")
+                  issue["labels"] = [l for l in issue["labels"] if l["name"] != AWAIT]
+                  notify("new", issue, ev["sender"])
+              elif not commenter_team and MXID.search(cbody):
+                  # A full Matrix ID anywhere else is public, so remove it.
+                  gh("DELETE", f"/issues/comments/{c['id']}", ok=(404,))
+                  if by_author:
+                      violation(issue, "a comment")
                   else:
-                      gh("DELETE", f"/issues/comments/{c['id']}", ok=(404,))
-                      if by_author:
-                          violation(issue, "a comment")
-                      else:
-                          gh("POST", f"/issues/{num}/comments", {"body": OTHERS})
-                          print(f"#{num}: removed a Matrix ID posted by someone else")
+                      gh("POST", f"/issues/{num}/comments", {"body": OTHERS})
+                      print(f"#{num}: removed a Matrix ID posted by someone else")
 
           sweep()
           PY
