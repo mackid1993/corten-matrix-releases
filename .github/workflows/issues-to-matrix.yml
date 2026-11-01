@@ -13,7 +13,9 @@ on:
   issue_comment:
     types: [created, edited]
   schedule:
-    - cron: "*/10 * * * *"
+    # Off-peak minutes: GitHub delays or drops runs at busy times like :00.
+    - cron: "7,17,27,37,47,57 * * * *"
+  workflow_dispatch:
 
 permissions:
   issues: write
@@ -203,7 +205,7 @@ jobs:
                       print(f"#{issue['number']}: no Matrix ID within 1 hour; closed")
 
           # ---------- dispatch ----------
-          if EVENT == "schedule":
+          if EVENT in ("schedule", "workflow_dispatch"):
               sweep()
               sys.exit(0)
 
