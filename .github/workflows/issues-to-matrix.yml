@@ -152,7 +152,9 @@ jobs:
                     "person who opened the issue, as described in the issue template.")
 
           # ---------- actions ----------
-          def close_issue(num, comment, labels_now):
+          def close_issue(issue, comment, note):
+              num = issue["number"]
+              labels_now = [l["name"] for l in issue.get("labels", [])]
               ensure_label(FAILED, "b60205", "Closed: no Matrix ID received the right way")
               gh("POST", f"/issues/{num}/comments", {"body": comment})
               if AWAIT in labels_now:
@@ -160,6 +162,7 @@ jobs:
               gh("POST", f"/issues/{num}/labels", {"labels": [FAILED]})
               gh("PATCH", f"/issues/{num}", {"state": "closed", "state_reason": "not_planned"})
               gh("PUT", f"/issues/{num}/lock", {"lock_reason": "resolved"}, ok=(422,))
+              notify("autoclosed", issue, None, note=note)
 
           def violation(issue, where):
               num = issue["number"]
@@ -167,7 +170,8 @@ jobs:
               body = MXID.sub("[Matrix ID removed]", issue.get("body") or "")
               if title != issue["title"] or body != (issue.get("body") or ""):
                   gh("PATCH", f"/issues/{num}", {"title": title, "body": body})
-              close_issue(num, violation_msg(where), [l["name"] for l in issue.get("labels", [])])
+              issue["title"] = title
+              close_issue(issue, violation_msg(where), "A Matrix ID was posted publicly")
               print(f"#{num}: Matrix ID posted in {where}; closed and locked")
 
           def mirror_to_inbox(issue, comment):
@@ -210,7 +214,8 @@ jobs:
                   cut_text += "\n```"
               return cut_text, True
 
-          def notify(kind, issue, actor):
+          SENT = [0]
+          def notify(kind, issue, actor, note=None, comment=None):
               num, title, url = issue["number"], issue["title"], issue["html_url"]
               link = f'<a href="{e(url)}"><b>#{num}: {e(title)}</b></a>'
               shown = [l["name"] for l in issue.get("labels", []) if l["name"] not in (AWAIT, FAILED)]
@@ -225,11 +230,26 @@ jobs:
                   if truncated:
                       formatted += f'<a href="{e(url)}">Read the full issue on GitHub →</a>'
                   plain = f"🆕 New issue #{num}: {title}\nby @{u['login']}\n{url}"
+              elif kind == "autoclosed":
+                  formatted = f"🔒 <b>Closed automatically</b> {link}<br>ℹ️ {e(note)}"
+                  plain = f"🔒 Closed automatically #{num}: {title}\n{note}\n{url}"
+              elif kind == "comment":
+                  who = f'<a href="{e(actor["html_url"])}">@{e(actor["login"])}</a>'
+                  curl = comment["html_url"]
+                  formatted = f'💬 <b>New comment</b> on {link}<br>👤 {who}'
+                  md, truncated = excerpt(MXID.sub("[Matrix ID]", comment.get("body") or ""), limit=500, max_lines=10)
+                  if md:
+                      formatted += "<blockquote>" + render(md) + "</blockquote>"
+                  if truncated:
+                      formatted += f'<a href="{e(curl)}">Read the full comment on GitHub →</a>'
+                  plain = f"💬 New comment on #{num}: {title}\nby @{actor['login']}\n{curl}"
               else:
                   who = f'<a href="{e(actor["html_url"])}">@{e(actor["login"])}</a>'
                   if kind == "closed":
                       reason = issue.get("state_reason") or "completed"
-                      icon, word = ("✅", "Closed") if reason == "completed" else ("🚫", "Closed as not planned")
+                      icon, word = {"completed": ("✅", "Closed as completed"),
+                                    "not_planned": ("🚫", "Closed as not planned"),
+                                    "duplicate": ("📑", "Closed as a duplicate")}.get(reason, ("✅", "Closed"))
                   else:
                       icon, word = "🔁", "Reopened"
                   formatted = f"{icon} <b>{word}</b> {link}<br>👤 {who}"
@@ -238,7 +258,8 @@ jobs:
                          "format": "org.matrix.custom.html", "formatted_body": formatted}
               hs = os.environ["MATRIX_HOMESERVER"].rstrip("/")
               room = urllib.parse.quote(os.environ["MATRIX_ROOM_ID"], safe="")
-              txn = f"gh-{os.environ['GITHUB_RUN_ID']}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
+              SENT[0] += 1
+              txn = f"gh-{os.environ['GITHUB_RUN_ID']}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}-{SENT[0]}"
               http("PUT", f"{hs}/_matrix/client/v3/rooms/{room}/send/m.room.message/{txn}",
                    os.environ["MATRIX_BOT_TOKEN"], content)
               print(f"Posted {kind} notice for #{num}")
@@ -249,7 +270,7 @@ jobs:
               for issue in gh("GET", f"/issues?state=open&labels={AWAIT}&per_page=100") or []:
                   created = datetime.datetime.fromisoformat(issue["created_at"].replace("Z", "+00:00"))
                   if now - created >= DEADLINE:
-                      close_issue(issue["number"], TIMEOUT, [l["name"] for l in issue["labels"]])
+                      close_issue(issue, TIMEOUT, "No Matrix ID within 1 hour")
                       print(f"#{issue['number']}: no Matrix ID within 1 hour; closed")
 
           # ---------- dispatch ----------
@@ -282,12 +303,11 @@ jobs:
                       violation(issue, "the title or description")
               elif action == "reopened":
                   if FAILED in labels and not author_team:
-                      close_issue(num, TIMEOUT, labels)
+                      close_issue(issue, TIMEOUT, "Reopened without a Matrix ID")
                   elif AWAIT not in labels:
                       notify("reopened", issue, ev["sender"])
               elif action == "closed":
-                  if AWAIT not in labels and FAILED not in labels:
-                      notify("closed", issue, ev["sender"])
+                  notify("closed", issue, ev["sender"])
 
           elif EVENT == "issue_comment":
               c = ev["comment"]
@@ -319,6 +339,8 @@ jobs:
                   else:
                       gh("POST", f"/issues/{num}/comments", {"body": OTHERS})
                       print(f"#{num}: removed a Matrix ID posted by someone else")
+              elif ev["action"] == "created":
+                  notify("comment", issue, c["user"], comment=c)
 
           sweep()
           PY
