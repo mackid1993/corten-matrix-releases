@@ -343,12 +343,12 @@ jobs:
                   except Exception as err:
                       gh("DELETE", f"/issues/comments/{c['id']}", ok=(404,))
                       gh("POST", f"/issues/{num}/comments", {"body": RETRY})
-                      print(f"#{num}: private tracker mirror failed: {type(err).__name__}")
+                      print(f"#{num}: private mirror failed: {type(err).__name__}")
                       sys.exit(1)
                   gh("DELETE", f"/issues/comments/{c['id']}", ok=(404,))
                   gh("DELETE", f"/issues/{num}/labels/{AWAIT}", ok=(404,))
                   gh("POST", f"/issues/{num}/comments", {"body": ACCEPTED})
-                  print(f"#{num}: contact reply accepted, mirrored to private tracker #{vnum}, comment deleted")
+                  print(f"#{num}: contact reply accepted, mirrored privately as #{vnum}, comment deleted")
                   issue["labels"] = [l for l in issue["labels"] if l["name"] != AWAIT]
                   notify("new", issue, ev["sender"])
               elif not commenter_team and MXID.search(cbody):
