@@ -154,8 +154,17 @@ jobs:
                     "person who opened the issue, as described in the issue template.")
 
           # ---------- actions ----------
+          def contact_received(num):
+              # True once the bot has posted its "Got it" comment, i.e. the issue
+              # finished the Matrix ID step and was announced in the room.
+              for cm in gh("GET", f"/issues/{num}/comments?per_page=100") or []:
+                  if cm["user"]["login"] == "github-actions[bot]" and cm["body"].startswith("✅ Got it."):
+                      return True
+              return False
+
           def close_issue(issue, comment, note):
               num = issue["number"]
+              announced = contact_received(num)
               # Another run (timer, sweep, event) may have closed it a moment ago.
               fresh = gh("GET", f"/issues/{num}")
               if fresh.get("state") == "closed":
@@ -169,7 +178,8 @@ jobs:
               gh("POST", f"/issues/{num}/labels", {"labels": [FAILED]})
               gh("PATCH", f"/issues/{num}", {"state": "closed", "state_reason": "not_planned"})
               gh("PUT", f"/issues/{num}/lock", {"lock_reason": "resolved"}, ok=(422,))
-              notify("autoclosed", issue, None, note=note)
+              if announced:
+                  notify("autoclosed", issue, None, note=note)
 
           def violation(issue, where):
               num = issue["number"]
@@ -311,10 +321,13 @@ jobs:
               elif action == "reopened":
                   if FAILED in labels and not author_team:
                       close_issue(issue, TIMEOUT, "Reopened without a Matrix ID")
-                  elif AWAIT not in labels:
+                  elif contact_received(num):
                       notify("reopened", issue, ev["sender"])
               elif action == "closed":
-                  notify("closed", issue, ev["sender"])
+                  if contact_received(num):
+                      notify("closed", issue, ev["sender"])
+                  else:
+                      print(f"#{num}: closed before its Matrix ID was received; not announced")
 
           elif EVENT == "issue_comment":
               c = ev["comment"]
@@ -347,5 +360,8 @@ jobs:
                       gh("POST", f"/issues/{num}/comments", {"body": OTHERS})
                       print(f"#{num}: removed a Matrix ID posted by someone else")
               elif ev["action"] == "created":
-                  notify("comment", issue, c["user"], comment=c)
+                  if contact_received(num):
+                      notify("comment", issue, c["user"], comment=c)
+                  else:
+                      print(f"#{num}: comment before the Matrix ID was received; not announced")
           PY
