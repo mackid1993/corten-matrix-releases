@@ -204,7 +204,7 @@ jobs:
                   (issue.get("body") or "_No description._").replace(TEST_MARK, ""),
                   "", "## Contact reply (deleted from GitHub)", "", comment["body"],
               ]
-              url = os.environ["INBOX_URL"]
+              url = os.environ["INBOX_URL"]  # full private endpoint, kept in a secret
               res = http("POST", url, os.environ["INBOX_TOKEN"],
                          {"title": f"GH #{issue['number']}: {issue['title']}", "body": "\n".join(lines)},
                          scheme="token")
