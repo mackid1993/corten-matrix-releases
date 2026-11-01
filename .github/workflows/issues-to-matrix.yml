@@ -196,20 +196,41 @@ jobs:
               return http(method, os.environ["INBOX_URL"] + suffix, os.environ["INBOX_TOKEN"],
                           data, scheme="token")
 
-          def close_in_inbox(num, why):
-              # Close the private copy of GitHub issue #num, if it's still open.
+          def find_in_inbox(num, state):
+              # The private copy of GitHub issue #num, matched by its "GH #N:" title.
               prefix = f"GH #{num}:"
-              for page in range(1, 11):
-                  batch = inbox("GET", f"?state=open&type=issues&limit=50&page={page}") or []
+              for page in range(1, 21):
+                  batch = inbox("GET", f"?state={state}&type=issues&limit=50&page={page}") or []
                   for it in batch:
                       if it["title"].startswith(prefix):
-                          inbox("POST", f"/{it['number']}/comments", {"body": f"Closed on GitHub: {why}"})
-                          inbox("PATCH", f"/{it['number']}", {"state": "closed"})
-                          print(f"#{num}: private copy #{it['number']} closed")
-                          return
+                          return it
                   if len(batch) < 50:
                       break
-              print(f"#{num}: no open private copy")
+              return None
+
+          def close_in_inbox(num, why):
+              # Close the private copy of GitHub issue #num, if it's still open.
+              it = find_in_inbox(num, "open")
+              if not it:
+                  print(f"#{num}: no open private copy")
+                  return
+              inbox("POST", f"/{it['number']}/comments", {"body": f"Closed on GitHub: {why}"})
+              inbox("PATCH", f"/{it['number']}", {"state": "closed"})
+              print(f"#{num}: private copy #{it['number']} closed")
+
+          def comment_to_inbox(num, comment):
+              # One-way copy of a GitHub comment into the private copy.
+              it = find_in_inbox(num, "all")
+              if not it:
+                  print(f"#{num}: no private copy for the comment")
+                  return
+              u = comment["user"]
+              text = (f"💬 **GitHub comment** by [@{u['login']}]({u['html_url']}) · "
+                      f"[view on GitHub]({comment['html_url']})\n\n"
+                      f"{comment.get('body') or '_(empty)_'}\n\n"
+                      "---\n_Copied from GitHub. Replies here stay private and are not posted to GitHub._")
+              inbox("POST", f"/{it['number']}/comments", {"body": text})
+              print(f"#{num}: comment copied to private copy #{it['number']}")
 
           def mirror_to_inbox(issue, comment):
               guesses = contact_guesses(comment["body"] or "")
@@ -381,8 +402,12 @@ jobs:
                   else:
                       gh("POST", f"/issues/{num}/comments", {"body": OTHERS})
                       print(f"#{num}: removed a Matrix ID posted by someone else")
-              elif ev["action"] == "created":
+              elif ev["action"] == "created" and c["user"]["login"] != "github-actions[bot]":
                   if contact_received(num):
+                      try:
+                          comment_to_inbox(num, c)
+                      except Exception as err:
+                          print(f"#{num}: copying the comment privately failed: {type(err).__name__}")
                       notify("comment", issue, c["user"], comment=c)
                   else:
                       print(f"#{num}: comment before the Matrix ID was received; not announced")
