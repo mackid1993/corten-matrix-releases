@@ -21,9 +21,11 @@ No SIP bypass. No Barcelona. No relay servers. Just Apple's iMessage servers, di
 [![Matrix](https://img.shields.io/badge/Matrix-Beeper%20%7C%20self--hosted-000000?style=for-the-badge&logo=matrix&logoColor=white)](#how-its-distributed)
 [![License](https://img.shields.io/badge/license-PolyForm%20NC-F5821F?style=for-the-badge)](LICENSE.md)
 
+[![Chat on Matrix](https://img.shields.io/badge/chat-%23corten--matrix%3Abeeper.com-0DBD8B?style=for-the-badge&logo=matrix&logoColor=white)](https://matrix.to/#/#corten-matrix:beeper.com)
+
 <br>
 
-**[⬇️ Download](https://github.com/mackid1993/corten-matrix-releases/releases/latest)** &nbsp;·&nbsp; **[🧰 CLI](#the-corten-matrix-cli)** &nbsp;·&nbsp; **[🩺 Troubleshooting](#troubleshooting)** &nbsp;·&nbsp; **[🐞 Report a bug](https://github.com/mackid1993/corten-matrix-releases/issues/new/choose)**
+**[⬇️ Download](https://github.com/mackid1993/corten-matrix-releases/releases/latest)** &nbsp;·&nbsp; **[🧰 CLI](#the-corten-matrix-cli)** &nbsp;·&nbsp; **[🩺 Troubleshooting](#troubleshooting)** &nbsp;·&nbsp; **[🐞 Report a bug](https://github.com/mackid1993/corten-matrix-releases/issues/new/choose)** &nbsp;·&nbsp; **[💬 Matrix room](https://matrix.to/#/#corten-matrix:beeper.com)**
 
 <br>
 
