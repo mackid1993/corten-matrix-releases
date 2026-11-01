@@ -154,6 +154,11 @@ jobs:
           # ---------- actions ----------
           def close_issue(issue, comment, note):
               num = issue["number"]
+              # Another run (timer, sweep, event) may have closed it a moment ago.
+              fresh = gh("GET", f"/issues/{num}")
+              if fresh.get("state") == "closed":
+                  print(f"#{num}: already closed, skipping")
+                  return
               labels_now = [l["name"] for l in issue.get("labels", [])]
               ensure_label(FAILED, "b60205", "Closed: no Matrix ID received the right way")
               gh("POST", f"/issues/{num}/comments", {"body": comment})
