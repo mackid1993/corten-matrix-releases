@@ -19,6 +19,15 @@ body:
         - **Matrix ID put anywhere else** (title, this form, any other comment): it's public, and the issue is closed and locked. If that happens, it's because the steps above weren't followed.
         - Your reply is visible on GitHub for a few seconds before the bot removes it, and may be included in email notifications to people watching this repository.
 
+  - type: input
+    id: room_display_name
+    attributes:
+      label: If you're already in our Matrix room, what's your display name?
+      description: Optional. The name people see you as in the room, so we know who you are. Not your Matrix ID.
+      placeholder: "e.g. Jane, or jane-bridges"
+    validations:
+      required: false
+
   - type: textarea
     id: request
     attributes:

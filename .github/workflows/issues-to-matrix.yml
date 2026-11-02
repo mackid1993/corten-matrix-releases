@@ -234,9 +234,15 @@ jobs:
 
           def mirror_to_inbox(issue, comment):
               guesses = contact_guesses(comment["body"] or "")
+              dn = re.search(r"### If you're already in our Matrix room, what's your display name\?\s*\n+(.+?)\s*(?:\n### |\Z)",
+                             issue.get("body") or "", re.S)
+              dn = dn.group(1).strip() if dn else ""
+              if dn in ("", "_No response_"):
+                  dn = "not given"
               lines = [
                   "**Matrix ID (best guess):** " + (", ".join("`" + g + "`" for g in guesses)
                                                    if guesses else "not recognized, see the reply below"),
+                  f"**Display name in the room:** {dn}",
                   f"**GitHub issue:** {issue['html_url']}",
                   f"**Reporter:** [@{issue['user']['login']}]({issue['user']['html_url']})",
                   f"**Opened:** {issue['created_at']}",

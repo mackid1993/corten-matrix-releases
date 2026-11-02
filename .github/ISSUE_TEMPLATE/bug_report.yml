@@ -29,6 +29,15 @@ body:
         Problems with your Apple account itself (for example, it also fails in Apple's Messages app) usually aren't bridge bugs.
 
   - type: input
+    id: room_display_name
+    attributes:
+      label: If you're already in our Matrix room, what's your display name?
+      description: Optional. The name people see you as in the room, so we know who you are. Not your Matrix ID.
+      placeholder: "e.g. Jane, or jane-bridges"
+    validations:
+      required: false
+
+  - type: input
     id: version
     attributes:
       label: Bridge version
