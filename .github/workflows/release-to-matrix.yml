@@ -1,0 +1,110 @@
+name: Release announcement (Matrix room)
+
+# Posts a notice in the Matrix room when a release is published.
+# Drafts don't trigger it; publishing the draft does.
+# Run by hand (Actions -> Run workflow) to announce an existing release.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to announce (blank = latest release)
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-to-matrix-${{ github.event.release.tag_name || inputs.tag || 'latest' }}
+
+jobs:
+  announce:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Post to the Matrix room
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          MATRIX_HOMESERVER: ${{ secrets.MATRIX_HOMESERVER }}
+          MATRIX_ROOM_ID: ${{ secrets.MATRIX_ROOM_ID }}
+          MATRIX_BOT_TOKEN: ${{ secrets.MATRIX_BOT_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import html, json, os, urllib.parse, urllib.request
+
+          repo = os.environ["REPO"]
+          API = "https://api.github.com"
+          e = html.escape
+
+          def http(method, url, token, data=None, raw=False):
+              req = urllib.request.Request(url, method=method,
+                  data=json.dumps(data).encode() if data is not None else None,
+                  headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+                           "Content-Type": "application/json", "User-Agent": "release-to-matrix"})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  body = r.read()
+                  return body.decode() if raw else (json.loads(body) if body else {})
+
+          gh = os.environ["GH_TOKEN"]
+          tag = (os.environ.get("TAG") or "").strip()
+          path = f"/repos/{repo}/releases/tags/{urllib.parse.quote(tag, safe='')}" if tag else f"/repos/{repo}/releases/latest"
+          rel = http("GET", API + path, gh)
+          if rel.get("draft"):
+              raise SystemExit("release is still a draft; not announcing")
+
+          name = rel.get("name") or rel["tag_name"]
+          url = rel["html_url"]
+          pre = rel.get("prerelease")
+          notes = (rel.get("body") or "").strip()
+
+          def render(md):
+              try:
+                  return http("POST", API + "/markdown", gh, {"text": md, "mode": "gfm", "context": repo}, raw=True)
+              except Exception:
+                  return "<p>" + e(md).replace("\n", "<br>") + "</p>"
+
+          # Keep long notes readable in chat: cut at a line break, link to the rest.
+          LIMIT, MAX_LINES = 2500, 40
+          lines = notes.splitlines()
+          shown = notes
+          truncated = False
+          if len(notes) > LIMIT or len(lines) > MAX_LINES:
+              shown = "\n".join(lines[:MAX_LINES])
+              if len(shown) > LIMIT:
+                  cut = shown.rfind("\n", 0, LIMIT)
+                  shown = shown[:cut if cut > LIMIT // 2 else LIMIT]
+              if shown.count("```") % 2:
+                  shown += "\n```"
+              truncated = True
+
+          icon, word = ("🧪", "New pre-release") if pre else ("🚀", "New release")
+          f = f'{icon} <b>{word}:</b> <a href="{e(url)}"><b>{e(name)}</b></a>'
+          if shown:
+              f += "<blockquote>" + render(shown) + "</blockquote>"
+          if truncated:
+              f += f'<p><a href="{e(url)}">Read the full release notes →</a></p>'
+          assets = [a["name"] for a in rel.get("assets", [])]
+          if assets:
+              f += "<p>📦 " + " · ".join(f"<code>{e(a)}</code>" for a in assets) + "</p>"
+          f += f'<p>⬇️ <a href="{e(url)}">Download on GitHub</a> or run <code>corten-matrix update</code></p>'
+
+          plain = f"{icon} {word}: {name}\n{url}\n\n{shown}"
+          if truncated:
+              plain += f"\n\nFull release notes: {url}"
+          plain += "\n\nDownload on GitHub or run `corten-matrix update`."
+
+          content = {"msgtype": "m.notice", "body": plain,
+                     "format": "org.matrix.custom.html", "formatted_body": f}
+          hs = os.environ["MATRIX_HOMESERVER"].rstrip("/")
+          room = urllib.parse.quote(os.environ["MATRIX_ROOM_ID"], safe="")
+          txn = f"release-{os.environ['GITHUB_RUN_ID']}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
+          req = urllib.request.Request(f"{hs}/_matrix/client/v3/rooms/{room}/send/m.room.message/{txn}",
+                                       method="PUT", data=json.dumps(content).encode(),
+                                       headers={"Authorization": f"Bearer {os.environ['MATRIX_BOT_TOKEN']}",
+                                                "Content-Type": "application/json"})
+          urllib.request.urlopen(req, timeout=30).read()
+          print(f"Announced {rel['tag_name']} in the room")
+          PY
