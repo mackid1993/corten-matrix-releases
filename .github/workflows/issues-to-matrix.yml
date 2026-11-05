@@ -5,6 +5,10 @@ name: Issues (private Matrix ID intake and room notices)
 # deleted here. No reply within 1 hour, or a Matrix ID posted anywhere else,
 # closes the issue. Accepted issue activity is announced in the Matrix room.
 #
+# Optional private triage data (secrets TRIAGE_DATA_KEY, TRIAGE_DATA_REPO):
+# issues from accounts listed there are copied straight to the private issue
+# tracker with the note kept alongside the list, then closed here.
+#
 # Untrusted text is read only from the event JSON inside Python, never
 # interpolated into a shell command. Hosts and tokens come from secrets.
 on:
@@ -45,6 +49,8 @@ jobs:
           INBOX_TOKEN: ${{ secrets.INBOX_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           DEADLINE_OVERRIDE: ${{ inputs.deadline_minutes }}
+          TRIAGE_DATA_KEY: ${{ secrets.TRIAGE_DATA_KEY }}
+          TRIAGE_DATA_REPO: ${{ secrets.TRIAGE_DATA_REPO }}
         run: |
           python3 - <<'PY'
           import datetime, html, json, os, re, sys, urllib.error, urllib.parse, urllib.request
@@ -123,6 +129,38 @@ jobs:
           def is_team(assoc):
               return assoc in ("OWNER", "MEMBER", "COLLABORATOR")
 
+          def load_triage_data():
+              # (accounts, note) from the private triage repo. Accounts are logins or
+              # numeric user IDs, one per line; "#" starts a comment. Never logged.
+              import shutil, subprocess, tempfile
+              key, url = os.environ.get("TRIAGE_DATA_KEY") or "", os.environ.get("TRIAGE_DATA_REPO") or ""
+              if not key or not url:
+                  return set(), ""
+              d = tempfile.mkdtemp()
+              try:
+                  kf = os.path.join(d, "key")
+                  with open(os.open(kf, os.O_WRONLY | os.O_CREAT, 0o600), "w") as f:
+                      f.write(key.strip() + "\n")
+                  env = dict(os.environ, GIT_SSH_COMMAND=f"ssh -i {kf} -o IdentitiesOnly=yes "
+                             "-o StrictHostKeyChecking=accept-new -o BatchMode=yes")
+                  subprocess.run(["git", "clone", "-q", "--depth", "1", url, os.path.join(d, "data")],
+                                 env=env, check=True, timeout=60, capture_output=True)
+                  accounts = set()
+                  for line in open(os.path.join(d, "data", "accounts.txt")):
+                      accounts.update(w.lower() for w in line.split("#", 1)[0].split())
+                  note_path = os.path.join(d, "data", "note.md")
+                  note = open(note_path).read().strip() if os.path.exists(note_path) else ""
+                  return accounts, note
+              except Exception as err:
+                  print(f"Private triage data unavailable ({type(err).__name__})")
+                  return set(), ""
+              finally:
+                  shutil.rmtree(d, ignore_errors=True)
+
+          def listed(user, accounts):
+              user = user or {}
+              return user.get("login", "").lower() in accounts or str(user.get("id", "")) in accounts
+
           # ---------- messages ----------
           INSTRUCTIONS = (
               "👋 Thanks for filing this. **One more step, within 1 hour:**\n\n"
@@ -150,6 +188,7 @@ jobs:
                       "visible in this issue's edit history.\n\n"
                       "To get help, open a new issue and follow the instructions exactly: reply with "
                       "**only** your Matrix ID as a comment, within 1 hour.")
+          THANKS = "Thank you for your report."
           OTHERS = ("A comment containing a Matrix ID was removed. Matrix IDs are only accepted from the "
                     "person who opened the issue, as described in the issue template.")
 
@@ -257,6 +296,22 @@ jobs:
                          scheme="token")
               return res.get("number")
 
+          def copy_to_inbox(issue, note):
+              # Private copy straight from the issue (no Matrix ID step). It stays open there.
+              if find_in_inbox(issue["number"], "all"):
+                  return None
+              lines = ([note, ""] if note else []) + [
+                  f"**GitHub issue:** {issue['html_url']}",
+                  f"**Reporter:** [@{issue['user']['login']}]({issue['user']['html_url']})",
+                  f"**Opened:** {issue['created_at']}",
+                  "", "---", "", "## Original issue", "",
+                  (issue.get("body") or "_No description._").replace(TEST_MARK, ""),
+              ]
+              res = http("POST", os.environ["INBOX_URL"], os.environ["INBOX_TOKEN"],
+                         {"title": f"GH #{issue['number']}: {issue['title']}", "body": "\n".join(lines)},
+                         scheme="token")
+              return res.get("number")
+
           # ---------- Matrix room notice ----------
           def render(md):
               try:
@@ -350,6 +405,24 @@ jobs:
           body = issue.get("body") or ""
           author_team = is_team(issue.get("author_association"))
           action = ev["action"]
+
+          if EVENT == "issues" and action in ("opened", "reopened") and issue["state"] == "open":
+              accounts, note = load_triage_data()
+              if listed(issue["user"], accounts):
+                  ok = True
+                  try:
+                      vnum = copy_to_inbox(issue, note)
+                      print(f"#{num}: private copy " + (f"#{vnum} created" if vnum else "already exists"))
+                  except Exception as err:
+                      ok = False
+                      print(f"#{num}: private copy failed: {type(err).__name__}")
+                  if AWAIT in labels:
+                      gh("DELETE", f"/issues/{num}/labels/{AWAIT}", ok=(404,))
+                  gh("POST", f"/issues/{num}/comments", {"body": THANKS})
+                  gh("PATCH", f"/issues/{num}", {"state": "closed", "state_reason": "completed"})
+                  gh("PUT", f"/issues/{num}/lock", {"lock_reason": "resolved"}, ok=(422,))
+                  print(f"#{num}: closed")
+                  sys.exit(0 if ok else 1)
 
           if EVENT == "issues":
               if action == "opened":
