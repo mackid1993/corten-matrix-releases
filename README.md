@@ -4,7 +4,7 @@
 
 # Corten-Matrix
 
-This is the new home for Corten-Matrix: **https://stilloxidizing.fyi**
+This is the new home for Corten-Matrix: **https://corten-matrix.com**
 
 Downloads, docs and everything else live there. If you're looking for the real Slim Shady, that's where you'll find him.
 
